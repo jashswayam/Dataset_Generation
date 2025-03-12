@@ -16,11 +16,12 @@ def perform_operations(input_dir="bank_data_joins"):
     initial_memory = get_memory_usage()
     print(f"Initial memory usage: {initial_memory:.2f} MB")
     
-    # Load the generated CSV data with lazy execution
+    # Load the generated data with lazy execution
     print("\nLazy loading data...")
-    accounts_df = pl.scan_csv(f"{input_dir}/accounts.csv")
-    merchants_df = pl.scan_csv(f"{input_dir}/merchants.csv")
-    transactions_df = pl.scan_csv(f"{input_dir}/transactions.csv")
+    # Using parquet files instead of CSV for better performance
+    accounts_df = pl.scan_parquet(f"{input_dir}/accounts.parquet")
+    merchants_df = pl.scan_parquet(f"{input_dir}/merchants.parquet")
+    transactions_df = pl.scan_parquet(f"{input_dir}/transactions.parquet")
 
     # Memory after setting up lazy loading
     loading_memory = get_memory_usage()
@@ -28,21 +29,66 @@ def perform_operations(input_dir="bank_data_joins"):
     print(f"Memory used for lazy loading setup: {loading_memory_diff:.2f} MB")
     print(f"Total memory after lazy loading setup: {loading_memory:.2f} MB")
     
-    # Start tracking time
-    start_time = time.time()
-
-    # ------ Merging Operation with Conditional Filtering ------
-    print("\nPerforming merging operation with conditional filtering...")
+    # ------ Filtering Operation ------
+    print("\nPerforming filtering operation...")
+    start_filter_time = time.time()
+    before_filter_memory = get_memory_usage()
+    
+    # Apply multiple filter conditions with 'and' logic
+    filtered_accounts = accounts_df.filter(
+        (pl.col('balance') > 10000) & 
+        (pl.col('status') == 'Active')
+    )
+    
+    # Filter transactions for amounts greater than 100
+    filtered_transactions = transactions_df.filter(
+        (pl.col('amount') > 100) &
+        (pl.col('status') == 'Completed')
+    )
+    
+    # Filter merchants based on rating
+    filtered_merchants = merchants_df.filter(
+        (pl.col('rating') >= 4.0) &
+        (pl.col('is_online') == True)
+    )
+    
+    # Force garbage collection
+    gc.collect()
+    
+    # Track memory and time after filtering setup (still lazy)
+    after_filter_memory = get_memory_usage()
+    filter_memory_diff = after_filter_memory - before_filter_memory
+    filter_time = time.time() - start_filter_time
+    print(f"Filtering operation setup completed in {filter_time:.4f} seconds.")
+    print(f"Memory used by filtering operation setup: {filter_memory_diff:.2f} MB")
+    print(f"Total memory after filtering setup: {after_filter_memory:.2f} MB")
+    
+    # ------ Merging Operation ------
+    print("\nPerforming merging operation...")
+    start_merge_time = time.time()
     before_merging_memory = get_memory_usage()
     
-    # Merge with conditional filtering within the lazy execution chain
-    merged_df = (accounts_df
-                .filter(pl.col('balance') > 10000)
-                .join(transactions_df, on='account_id', how='inner')
-                .join(merchants_df, on='merchant_id', how='inner')
-                .with_columns(
-                    pl.when(pl.col('amount') > 500).then(pl.lit('Yes')).otherwise(pl.lit('No')).alias('high_value_transaction')
-                ))
+    # First join accounts with transactions
+    accounts_transactions = filtered_accounts.join(
+        filtered_transactions, 
+        on='account_id', 
+        how='inner'
+    )
+    
+    # Then join with merchants
+    merged_df = accounts_transactions.join(
+        filtered_merchants, 
+        on='merchant_id', 
+        how='inner'
+    )
+    
+    # Add derived column
+    merged_df = merged_df.with_columns(
+        pl.when(pl.col('amount') > 500)
+          .then(pl.lit('Yes'))
+          .otherwise(pl.lit('No'))
+          .alias('high_value_transaction')
+    )
     
     # Force garbage collection
     gc.collect()
@@ -50,26 +96,38 @@ def perform_operations(input_dir="bank_data_joins"):
     # Track memory and time after merging setup (still lazy)
     after_merging_memory = get_memory_usage()
     merging_memory_diff = after_merging_memory - before_merging_memory
-    merge_time = time.time() - start_time
+    merge_time = time.time() - start_merge_time
     print(f"Merging operation setup completed in {merge_time:.4f} seconds.")
     print(f"Memory used by merging operation setup: {merging_memory_diff:.2f} MB")
     print(f"Total memory after merging setup: {after_merging_memory:.2f} MB")
 
     # ------ Group By Operation ------
     print("\nPerforming group by operation...")
+    start_groupby_time = time.time()
     before_groupby_memory = get_memory_usage()
     
     # Define a groupby operation in the lazy chain
-    grouped_df = (merged_df
-                 .group_by(['merchant_category', 'high_value_transaction'])
-                 .agg([
-                     pl.sum('amount').alias('total_amount'),
-                     pl.count('transaction_id').alias('transaction_count'),
-                     pl.mean('balance').alias('avg_balance')
-                 ]))
+    grouped_df = merged_df.group_by([
+        'category',  # Using merchant category
+        'high_value_transaction'
+    ]).agg([
+        pl.sum('amount').alias('total_amount'),
+        pl.count('transaction_id').alias('transaction_count'),
+        pl.mean('balance').alias('avg_balance'),
+        pl.n_unique('account_id').alias('unique_accounts'),
+        pl.n_unique('merchant_id').alias('unique_merchants')
+    ])
     
     # Execute the lazy chain and materialize the results
+    print("\nCollecting results...")
+    collection_start_time = time.time()
     result = grouped_df.collect()
+    collection_time = time.time() - collection_start_time
+    print(f"Collection completed in {collection_time:.4f} seconds.")
+    
+    # Display sample of the result
+    print("\nSample of the result:")
+    print(result.head(5))
     
     # Force garbage collection
     gc.collect()
@@ -77,7 +135,7 @@ def perform_operations(input_dir="bank_data_joins"):
     # Track memory and time after groupby execution
     after_groupby_memory = get_memory_usage()
     groupby_memory_diff = after_groupby_memory - before_groupby_memory
-    groupby_time = time.time() - start_time
+    groupby_time = time.time() - start_groupby_time
     print(f"Group by operation completed in {groupby_time:.4f} seconds.")
     print(f"Memory used by group by operation: {groupby_memory_diff:.2f} MB")
     print(f"Total memory after group by: {after_groupby_memory:.2f} MB")
@@ -86,16 +144,22 @@ def perform_operations(input_dir="bank_data_joins"):
     print("\n----- PERFORMANCE SUMMARY -----")
     print(f"Initial memory usage: {initial_memory:.2f} MB")
     print(f"Memory used for lazy loading setup: {loading_memory_diff:.2f} MB")
-    print(f"Memory used by merging operation with filtering: {merging_memory_diff:.2f} MB")
+    print(f"Memory used by filtering operation: {filter_memory_diff:.2f} MB")
+    print(f"Memory used by merging operation: {merging_memory_diff:.2f} MB")
     print(f"Memory used by group by operation: {groupby_memory_diff:.2f} MB")
     print(f"Total memory increase: {after_groupby_memory - initial_memory:.2f} MB")
     
+    print(f"\nFiltering operation setup took: {filter_time:.4f} seconds.")
     print(f"\nMerging operation setup took: {merge_time:.4f} seconds.")
-    print(f"Group by operation execution took: {groupby_time - merge_time:.4f} seconds.")
-    print(f"Total processing time: {groupby_time:.4f} seconds.")
+    print(f"Group by operation execution took: {groupby_time:.4f} seconds.")
+    print(f"Collection time: {collection_time:.4f} seconds.")
+    print(f"Total processing time: {time.time() - start_filter_time:.4f} seconds.")
     
-    # Optionally save the final result to a new CSV file
+    # Optionally save the final result to a new parquet file
+    result.write_parquet(f"{input_dir}/grouped_data.parquet")
     result.write_csv(f"{input_dir}/grouped_data.csv")
+    
+    return result
 
 if __name__ == "__main__":
     perform_operations()
