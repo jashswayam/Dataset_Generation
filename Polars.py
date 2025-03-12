@@ -61,7 +61,7 @@ def perform_operations(input_dir="bank_data_joins"):
     
     # Define a groupby operation in the lazy chain
     grouped_df = (merged_df
-                 .groupby(['merchant_category', 'high_value_transaction'])
+                 .group_by(['merchant_category', 'high_value_transaction'])
                  .agg([
                      pl.sum('amount').alias('total_amount'),
                      pl.count('transaction_id').alias('transaction_count'),
