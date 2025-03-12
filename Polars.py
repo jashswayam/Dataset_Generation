@@ -29,55 +29,79 @@ def perform_operations(input_dir="bank_data_joins"):
     print(f"Memory used for lazy loading setup: {loading_memory_diff:.2f} MB")
     print(f"Total memory after lazy loading setup: {loading_memory:.2f} MB")
     
-    # ------ Filtering Operation ------
-    print("\nPerforming filtering operation...")
+    # ------ Filtering Operation (Standalone) ------
+    print("\nPerforming filtering operation (Standalone)...")
     start_filter_time = time.time()
     before_filter_memory = get_memory_usage()
     
-    # Apply multiple filter conditions with 'and' logic
+    # Standalone filtering for accounts
+    print("Filtering accounts...")
     filtered_accounts = accounts_df.filter(
         (pl.col('balance') > 10000) & 
         (pl.col('status') == 'Active')
     )
     
-    # Filter transactions for amounts greater than 100
+    # Execute this filter independently to see results
+    filtered_accounts_result = filtered_accounts.collect()
+    print(f"Number of filtered accounts: {len(filtered_accounts_result)}")
+    print(f"Sample of filtered accounts:")
+    print(filtered_accounts_result.head(3))
+    
+    # Standalone filtering for transactions
+    print("\nFiltering transactions...")
     filtered_transactions = transactions_df.filter(
         (pl.col('amount') > 100) &
         (pl.col('status') == 'Completed')
     )
     
-    # Filter merchants based on rating
+    # Execute this filter independently
+    filtered_transactions_result = filtered_transactions.collect()
+    print(f"Number of filtered transactions: {len(filtered_transactions_result)}")
+    print(f"Sample of filtered transactions:")
+    print(filtered_transactions_result.head(3))
+    
+    # Standalone filtering for merchants
+    print("\nFiltering merchants...")
     filtered_merchants = merchants_df.filter(
         (pl.col('rating') >= 4.0) &
         (pl.col('is_online') == True)
     )
     
+    # Execute this filter independently
+    filtered_merchants_result = filtered_merchants.collect()
+    print(f"Number of filtered merchants: {len(filtered_merchants_result)}")
+    print(f"Sample of filtered merchants:")
+    print(filtered_merchants_result.head(3))
+    
     # Force garbage collection
     gc.collect()
     
-    # Track memory and time after filtering setup (still lazy)
+    # Track memory and time after filtering
     after_filter_memory = get_memory_usage()
     filter_memory_diff = after_filter_memory - before_filter_memory
     filter_time = time.time() - start_filter_time
-    print(f"Filtering operation setup completed in {filter_time:.4f} seconds.")
-    print(f"Memory used by filtering operation setup: {filter_memory_diff:.2f} MB")
-    print(f"Total memory after filtering setup: {after_filter_memory:.2f} MB")
+    print(f"Filtering operations completed in {filter_time:.4f} seconds.")
+    print(f"Memory used by filtering operations: {filter_memory_diff:.2f} MB")
+    print(f"Total memory after filtering: {after_filter_memory:.2f} MB")
     
-    # ------ Merging Operation ------
-    print("\nPerforming merging operation...")
+    # ------ Merging Operation (Completely Separate) ------
+    print("\nPerforming merging operation (without filtering)...")
     start_merge_time = time.time()
     before_merging_memory = get_memory_usage()
     
+    # Start fresh with original dataframes for merging
     # First join accounts with transactions
-    accounts_transactions = filtered_accounts.join(
-        filtered_transactions, 
+    print("Joining accounts with transactions...")
+    accounts_transactions = accounts_df.join(
+        transactions_df, 
         on='account_id', 
         how='inner'
     )
     
     # Then join with merchants
+    print("Joining with merchants...")
     merged_df = accounts_transactions.join(
-        filtered_merchants, 
+        merchants_df, 
         on='merchant_id', 
         how='inner'
     )
@@ -144,14 +168,14 @@ def perform_operations(input_dir="bank_data_joins"):
     print("\n----- PERFORMANCE SUMMARY -----")
     print(f"Initial memory usage: {initial_memory:.2f} MB")
     print(f"Memory used for lazy loading setup: {loading_memory_diff:.2f} MB")
-    print(f"Memory used by filtering operation: {filter_memory_diff:.2f} MB")
-    print(f"Memory used by merging operation: {merging_memory_diff:.2f} MB")
+    print(f"Memory used by filtering operation (standalone): {filter_memory_diff:.2f} MB")
+    print(f"Memory used by merging operation (separate): {merging_memory_diff:.2f} MB")
     print(f"Memory used by group by operation: {groupby_memory_diff:.2f} MB")
     print(f"Total memory increase: {after_groupby_memory - initial_memory:.2f} MB")
     
-    print(f"\nFiltering operation setup took: {filter_time:.4f} seconds.")
-    print(f"\nMerging operation setup took: {merge_time:.4f} seconds.")
-    print(f"Group by operation execution took: {groupby_time:.4f} seconds.")
+    print(f"\nFiltering operation took: {filter_time:.4f} seconds.")
+    print(f"Merging operation took: {merge_time:.4f} seconds.")
+    print(f"Group by operation took: {groupby_time:.4f} seconds.")
     print(f"Collection time: {collection_time:.4f} seconds.")
     print(f"Total processing time: {time.time() - start_filter_time:.4f} seconds.")
     
