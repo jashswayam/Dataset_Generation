@@ -1,11 +1,7 @@
 import pandas as pd
 import psutil
 import time
-import threading
-import queue
-
-# Global queue for thread communication
-result_queue = queue.Queue()
+import gc
 
 def get_memory_usage():
     """
@@ -15,74 +11,88 @@ def get_memory_usage():
     memory_info = process.memory_info()
     return memory_info.rss / 1024 / 1024  # Memory in MB
 
-def track_performance(result_queue):
-    """
-    Track memory usage and time in a separate thread
-    """
-    # Memory before operations
-    mem_before = get_memory_usage()
-    result_queue.put(("mem_before", mem_before))
-    
-    # Track time before operations
-    start_time = time.time()
-    result_queue.put(("start_time", start_time))
-
 def perform_operations(input_dir="bank_data_joins"):
+    # Initial memory measurement
+    initial_memory = get_memory_usage()
+    print(f"Initial memory usage: {initial_memory:.2f} MB")
+    
     # Load the generated CSV data
-    print("Loading data...")
+    print("\nLoading data...")
     accounts_df = pd.read_csv(f"{input_dir}/accounts.csv")
     merchants_df = pd.read_csv(f"{input_dir}/merchants.csv")
     transactions_df = pd.read_csv(f"{input_dir}/transactions.csv")
 
-    # Get memory before any operations
-    mem_before = get_memory_usage()
-    print(f"Memory before operations: {mem_before:.2f} MB")
+    # Memory after loading data
+    loading_memory = get_memory_usage()
+    loading_memory_diff = loading_memory - initial_memory
+    print(f"Memory used for loading data: {loading_memory_diff:.2f} MB")
+    print(f"Total memory after loading: {loading_memory:.2f} MB")
     
-    # Track the start time
+    # Start tracking time
     start_time = time.time()
 
     # ------ Filtering Operation ------
-    print("Performing filtering operation...")
-    filtered_accounts = accounts_df[accounts_df['balance'] > 10000]  # Example: filter accounts with balance > 10K
+    print("\nPerforming filtering operation...")
+    before_filtering_memory = get_memory_usage()
+    filtered_accounts = accounts_df[accounts_df['balance'] > 10000]
+    
+    # Force garbage collection to get accurate memory difference
+    gc.collect()
     
     # Track memory and time after filtering
-    mem_after_filter = get_memory_usage()
+    after_filtering_memory = get_memory_usage()
+    filtering_memory_diff = after_filtering_memory - before_filtering_memory
     filter_time = time.time() - start_time
     print(f"Filtering operation completed in {filter_time:.4f} seconds.")
-    print(f"Memory after filtering operation: {mem_after_filter:.2f} MB")
+    print(f"Memory used by filtering operation: {filtering_memory_diff:.2f} MB")
+    print(f"Total memory after filtering: {after_filtering_memory:.2f} MB")
 
     # ------ Merging Operation ------
-    print("Performing merging operation...")
+    print("\nPerforming merging operation...")
+    before_merging_memory = get_memory_usage()
     merged_df = pd.merge(filtered_accounts, transactions_df, on='account_id', how='inner')
     merged_df = pd.merge(merged_df, merchants_df, on='merchant_id', how='inner')
     
+    # Force garbage collection
+    gc.collect()
+    
     # Track memory and time after merging
-    mem_after_merge = get_memory_usage()
+    after_merging_memory = get_memory_usage()
+    merging_memory_diff = after_merging_memory - before_merging_memory
     merge_time = time.time() - start_time
     print(f"Merging operation completed in {merge_time:.4f} seconds.")
-    print(f"Memory after merging operation: {mem_after_merge:.2f} MB")
+    print(f"Memory used by merging operation: {merging_memory_diff:.2f} MB")
+    print(f"Total memory after merging: {after_merging_memory:.2f} MB")
 
     # ------ Conditional Operation ------
-    print("Performing conditional operation...")
+    print("\nPerforming conditional operation...")
+    before_conditional_memory = get_memory_usage()
     merged_df['high_value_transaction'] = merged_df['amount'].apply(lambda x: 'Yes' if x > 500 else 'No')
     
+    # Force garbage collection
+    gc.collect()
+    
     # Track memory and time after conditional operations
-    mem_after_condition = get_memory_usage()
+    after_conditional_memory = get_memory_usage()
+    conditional_memory_diff = after_conditional_memory - before_conditional_memory
     condition_time = time.time() - start_time
     print(f"Conditional operation completed in {condition_time:.4f} seconds.")
-    print(f"Memory after conditional operation: {mem_after_condition:.2f} MB")
+    print(f"Memory used by conditional operation: {conditional_memory_diff:.2f} MB")
+    print(f"Total memory after conditional operation: {after_conditional_memory:.2f} MB")
 
-    # ------ Generate a report ------
-    print("\n--- Report ---")
-    print(f"Memory before operations: {mem_before:.2f} MB")
-    print(f"Memory after filtering operation: {mem_after_filter:.2f} MB")
-    print(f"Memory after merging operation: {mem_after_merge:.2f} MB")
-    print(f"Memory after conditional operation: {mem_after_condition:.2f} MB")
+    # ------ Generate a summary report ------
+    print("\n----- PERFORMANCE SUMMARY -----")
+    print(f"Initial memory usage: {initial_memory:.2f} MB")
+    print(f"Memory used for loading data: {loading_memory_diff:.2f} MB")
+    print(f"Memory used by filtering operation: {filtering_memory_diff:.2f} MB")
+    print(f"Memory used by merging operation: {merging_memory_diff:.2f} MB")
+    print(f"Memory used by conditional operation: {conditional_memory_diff:.2f} MB")
+    print(f"Total memory increase: {after_conditional_memory - initial_memory:.2f} MB")
     
     print(f"\nFiltering operation took: {filter_time:.4f} seconds.")
     print(f"Merging operation took: {merge_time - filter_time:.4f} seconds.")
     print(f"Conditional operation took: {condition_time - merge_time:.4f} seconds.")
-    print(f"Total time: {condition_time:.4f} seconds.")
+    print(f"Total processing time: {condition_time:.4f} seconds.")
     
     # Optionally save the final result to a new CSV file
     merged_df.to_csv(f"{input_dir}/merged_data.csv", index=False)
