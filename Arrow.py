@@ -1,6 +1,5 @@
 import pandas as pd
 import pyarrow as pa
-import pyarrow.csv as csv
 import pyarrow.parquet as pq
 import psutil
 import time
@@ -25,9 +24,9 @@ def perform_operations(input_dir="bank_data_joins"):
     # Load the generated CSV data using PyArrow
     print("\nLoading data...")
     # Use PyArrow's CSV reader which is more memory efficient
-    accounts_table = csv.read_csv(f"{input_dir}/accounts.csv")
-    merchants_table = csv.read_csv(f"{input_dir}/merchants.csv")
-    transactions_table = csv.read_csv(f"{input_dir}/transactions.csv")
+    accounts_table = pa.csv.read_csv(f"{input_dir}/accounts.csv")
+    merchants_table = pa.csv.read_csv(f"{input_dir}/merchants.csv")
+    transactions_table = pa.csv.read_csv(f"{input_dir}/transactions.csv")
     
     # Convert to pandas with Arrow-backed memory
     accounts_df = accounts_table.to_pandas()
@@ -117,8 +116,8 @@ def perform_operations(input_dir="bank_data_joins"):
     arrow_table = pa.Table.from_pandas(merged_df)
     pq.write_table(arrow_table, f"{input_dir}/merged_data.parquet")
     
-    # Also save as CSV for compatibility with the original code
-    merged_df.to_csv(f"{input_dir}/merged_data.csv", index=False)
+    # Remove CSV output since you already have a parquet file
+    # merged_df.to_csv(f"{input_dir}/merged_data.csv", index=False)
 
 if __name__ == "__main__":
     perform_operations()
