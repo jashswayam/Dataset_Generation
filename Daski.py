@@ -84,13 +84,16 @@ def perform_operations(input_dir="bank_data_joins"):
     # Convert back to Dask DataFrame for groupby
     merged_ddf = dd.from_pandas(merged_df, npartitions=4)
     
-    grouped_df = merged_ddf.groupby(['category', 'high_value_transaction']).agg({
-        'amount': 'sum',
-        'transaction_id': 'count',
-        'balance': 'mean',
-        'account_id': 'nunique',
-        'merchant_id': 'nunique'
-    }).reset_index()
+    grouped_ddf = merged_ddf.groupby(['category', 'high_value_transaction']).agg({
+    'amount': 'sum',
+    'transaction_id': 'count',
+    'balance': 'mean'
+})
+
+grouped_ddf = grouped_ddf.compute()
+grouped_ddf['account_id_nunique'] = merged_df['account_id'].nunique()
+grouped_ddf['merchant_id_nunique'] = merged_df['merchant_id'].nunique()
+grouped_df = grouped_ddf.reset_index()
     
     # Compute final grouped result
     grouped_df = grouped_df.compute()
