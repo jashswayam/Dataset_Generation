@@ -64,27 +64,32 @@ def perform_operations(input_dir="bank_data_joins"):
     merged_df['high_value_transaction'] = merged_df['amount'].map(lambda x: 'Yes' if x > 500 else 'No', 
                                                                 meta=('high_value_transaction', 'object'))
     
-    # Track memory and time after merging - but don't compute yet
-    after_start_merging_memory = get_memory_usage()
-    
     # ------ Group By Operation ------
     print("\nPerforming group by operation...")
     start_groupby_time = time.time()
     
-    # Use Dask's native nunique in the groupby
+    # Use standard aggregations that work in Dask
     grouped_df = merged_df.groupby(['category', 'high_value_transaction']).agg({
         'amount': 'sum',
         'transaction_id': 'count',
-        'balance': 'mean',
-        'account_id': 'nunique',  # Use Dask's built-in nunique
-        'merchant_id': 'nunique'  # Use Dask's built-in nunique
+        'balance': 'mean'
     })
     
-    # Reset index while still in Dask
-    grouped_df = grouped_df.reset_index()
-    
-    # Now compute the final result
+    # Calculate nunique values separately
+    # First compute the grouped dataframe to get the base results
     grouped_df = grouped_df.compute()
+    
+    # Then compute nunique counts and add them to the results
+    # We need to calculate these on the original merged dataframe
+    unique_accounts = merged_df.groupby(['category', 'high_value_transaction'])['account_id'].nunique().compute()
+    unique_merchants = merged_df.groupby(['category', 'high_value_transaction'])['merchant_id'].nunique().compute()
+    
+    # Add the unique counts to our results
+    grouped_df['account_id_nunique'] = unique_accounts
+    grouped_df['merchant_id_nunique'] = unique_merchants
+    
+    # Reset the index for the final result
+    grouped_df = grouped_df.reset_index()
     
     # Force garbage collection
     gc.collect()
