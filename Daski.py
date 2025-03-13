@@ -60,42 +60,30 @@ def perform_operations(input_dir="bank_data_joins"):
     # Join with merchants
     merged_df = accounts_transactions.merge(merchants_df, on='merchant_id', how='inner')
     
-    # Add derived column
-    merged_df['high_value_transaction'] = merged_df['amount'].map(lambda x: 'Yes' if x > 500 else 'No', meta=('amount', 'object'))
+    # Add derived column - provide proper metadata
+    merged_df['high_value_transaction'] = merged_df['amount'].map(lambda x: 'Yes' if x > 500 else 'No', 
+                                                                meta=('high_value_transaction', 'object'))
     
-    # Compute the final merged dataframe
-    merged_df = merged_df.compute()
+    # Track memory and time after merging - but don't compute yet
+    after_start_merging_memory = get_memory_usage()
     
-    # Force garbage collection
-    gc.collect()
-    
-    # Track memory and time after merging
-    after_merging_memory = get_memory_usage()
-    merging_memory_diff = after_merging_memory - after_filter_memory
-    merge_time = time.time() - start_merge_time
-    print(f"Merging completed in {merge_time:.4f} seconds.")
-    print(f"Memory used by merging: {merging_memory_diff:.2f} MB")
-    print(f"Total memory after merging: {after_merging_memory:.2f} MB")
-
     # ------ Group By Operation ------
     print("\nPerforming group by operation...")
     start_groupby_time = time.time()
     
-    # Convert back to Dask DataFrame for groupby
-    merged_ddf = dd.from_pandas(merged_df, npartitions=4)
+    # Use Dask's native nunique in the groupby
+    grouped_df = merged_df.groupby(['category', 'high_value_transaction']).agg({
+        'amount': 'sum',
+        'transaction_id': 'count',
+        'balance': 'mean',
+        'account_id': 'nunique',  # Use Dask's built-in nunique
+        'merchant_id': 'nunique'  # Use Dask's built-in nunique
+    })
     
-    grouped_ddf = merged_ddf.groupby(['category', 'high_value_transaction']).agg({
-    'amount': 'sum',
-    'transaction_id': 'count',
-    'balance': 'mean'
-})
-
-grouped_ddf = grouped_ddf.compute()
-grouped_ddf['account_id_nunique'] = merged_df['account_id'].nunique()
-grouped_ddf['merchant_id_nunique'] = merged_df['merchant_id'].nunique()
-grouped_df = grouped_ddf.reset_index()
+    # Reset index while still in Dask
+    grouped_df = grouped_df.reset_index()
     
-    # Compute final grouped result
+    # Now compute the final result
     grouped_df = grouped_df.compute()
     
     # Force garbage collection
@@ -103,10 +91,12 @@ grouped_df = grouped_ddf.reset_index()
     
     # Track memory and time after groupby execution
     after_groupby_memory = get_memory_usage()
-    groupby_memory_diff = after_groupby_memory - after_merging_memory
+    merging_and_groupby_memory_diff = after_groupby_memory - after_filter_memory
+    merge_and_groupby_time = time.time() - start_merge_time
     groupby_time = time.time() - start_groupby_time
-    print(f"Group by completed in {groupby_time:.4f} seconds.")
-    print(f"Memory used by group by: {groupby_memory_diff:.2f} MB")
+    print(f"Merging and Group by completed in {merge_and_groupby_time:.4f} seconds.")
+    print(f"Group by portion took {groupby_time:.4f} seconds.")
+    print(f"Memory used by merging and group by: {merging_and_groupby_memory_diff:.2f} MB")
     print(f"Total memory after group by: {after_groupby_memory:.2f} MB")
 
     # ------ Generate a summary report ------
@@ -114,13 +104,11 @@ grouped_df = grouped_ddf.reset_index()
     print(f"Initial memory usage: {initial_memory:.2f} MB")
     print(f"Memory used for loading with Dask: {loading_memory_diff:.2f} MB")
     print(f"Memory used by filtering: {filter_memory_diff:.2f} MB")
-    print(f"Memory used by merging: {merging_memory_diff:.2f} MB")
-    print(f"Memory used by group by: {groupby_memory_diff:.2f} MB")
+    print(f"Memory used by merging and group by: {merging_and_groupby_memory_diff:.2f} MB")
     print(f"Total memory increase: {after_groupby_memory - initial_memory:.2f} MB")
     
     print(f"\nFiltering took: {filter_time:.4f} seconds.")
-    print(f"Merging took: {merge_time:.4f} seconds.")
-    print(f"Group by took: {groupby_time:.4f} seconds.")
+    print(f"Merging and Group by took: {merge_and_groupby_time:.4f} seconds.")
     print(f"Total processing time: {time.time() - start_filter_time:.4f} seconds.")
     
     # Save the final results
