@@ -41,38 +41,7 @@ def perform_operations(input_dir="bank_data_joins"):
         (pl.col('status') == 'Active')
     )
     
-    # Execute this filter independently to see results
-    filtered_accounts_result = filtered_accounts.collect()
-    print(f"Number of filtered accounts: {len(filtered_accounts_result)}")
-    print(f"Sample of filtered accounts:")
-    print(filtered_accounts_result.head(3))
-    
-    # Standalone filtering for transactions
-    print("\nFiltering transactions...")
-    filtered_transactions = transactions_df.filter(
-        (pl.col('amount') > 100) &
-        (pl.col('status') == 'Completed')
-    )
-    
-    # Execute this filter independently
-    filtered_transactions_result = filtered_transactions.collect()
-    print(f"Number of filtered transactions: {len(filtered_transactions_result)}")
-    print(f"Sample of filtered transactions:")
-    print(filtered_transactions_result.head(3))
-    
-    # Standalone filtering for merchants
-    print("\nFiltering merchants...")
-    filtered_merchants = merchants_df.filter(
-        (pl.col('rating') >= 4.0) &
-        (pl.col('is_online') == True)
-    )
-    
-    # Execute this filter independently
-    filtered_merchants_result = filtered_merchants.collect()
-    print(f"Number of filtered merchants: {len(filtered_merchants_result)}")
-    print(f"Sample of filtered merchants:")
-    print(filtered_merchants_result.head(3))
-    
+
     # Force garbage collection
     gc.collect()
     
