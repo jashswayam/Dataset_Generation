@@ -92,23 +92,17 @@ def perform_operations(input_dir="bank_data_joins"):
     accounts_filtered = accounts_df[accounts_df['status'] == 'Active']
 
     # Convert small dataframes to Pandas for faster joins
-    if isinstance(accounts_filtered, dd.DataFrame):
-        accounts_pd = accounts_filtered.compute()
-    else:
-        accounts_pd = accounts_filtered
-
-    if isinstance(merchants_df, dd.DataFrame):
-        merchants_pd = merchants_df.compute()
-    else:
-        merchants_pd = merchants_df
+    accounts_pd = accounts_filtered.compute() if isinstance(accounts_filtered, dd.DataFrame) else accounts_filtered
+    merchants_pd = merchants_df.compute() if isinstance(merchants_df, dd.DataFrame) else merchants_df
 
     # Processing transactions in chunks
     chunk_results = []
 
     @delayed
     def process_chunk(txn_part):
-        txn_pd = txn_part.compute()
-        
+        # Ensure txn_part is a Pandas DataFrame
+        txn_pd = txn_part.compute() if isinstance(txn_part, dd.DataFrame) else txn_part  
+
         # Merge transactions with merchants and accounts
         merged = txn_pd.merge(merchants_pd, on='merchant_id', how='inner')
         merged = merged.merge(accounts_pd, on='account_id', how='inner')
@@ -123,7 +117,7 @@ def perform_operations(input_dir="bank_data_joins"):
             group_cols=['category', 'high_value_transaction'],
             agg_cols=['amount', 'balance', 'account_id', 'merchant_id']
         )
-        
+
         return result
 
     print("Processing transactions in parallel...")
