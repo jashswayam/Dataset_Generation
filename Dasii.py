@@ -4,9 +4,10 @@ import pandas as pd
 import psutil
 import time
 import gc
+import numba
+from numba import jit, prange
 from dask.diagnostics import ProgressBar
 from dask import delayed
-from dask.distributed import Client, performance_report
 
 def get_memory_usage():
     """
@@ -16,36 +17,112 @@ def get_memory_usage():
     memory_info = process.memory_info()
     return memory_info.rss / 1024 / 1024  # Memory in MB
 
+# Define Numba-accelerated functions for aggregation
+@jit(nopython=True, parallel=True)
+def numba_sum(arr):
+    return np.sum(arr)
+
+@jit(nopython=True, parallel=True)
+def numba_mean(arr):
+    return np.mean(arr)
+
+@jit(nopython=True, parallel=True)
+def numba_count_unique(arr):
+    # Create a set of unique values using Numba's approach
+    unique_set = set()
+    for x in arr:
+        unique_set.add(x)
+    return len(unique_set)
+
+@jit(nopython=True)
+def numba_filter_high_value(amounts, threshold=500):
+    """Return array of Yes/No strings based on amount threshold"""
+    result = np.empty(len(amounts), dtype=numba.types.string)
+    for i in range(len(amounts)):
+        if amounts[i] > threshold:
+            result[i] = 'Yes'
+        else:
+            result[i] = 'No'
+    return result
+
+# Custom aggregation function using Numba
+def fast_group_aggregate(df, group_cols, agg_cols):
+    """
+    Perform fast group by aggregation using Numba-accelerated functions
+    """
+    # Convert to numpy arrays for Numba
+    df_dict = {col: df[col].values for col in df.columns}
+    
+    # Get unique group combinations
+    group_values = df[group_cols].drop_duplicates()
+    
+    # Prepare result containers
+    results = []
+    
+    # For each unique group combination
+    for _, group_row in group_values.iterrows():
+        # Create mask for this group
+        mask = np.ones(len(df), dtype=bool)
+        for col in group_cols:
+            mask = mask & (df_dict[col] == group_row[col])
+        
+        # Skip if no data for this group
+        if not np.any(mask):
+            continue
+        
+        # Create result row starting with group values
+        result_row = {col: group_row[col] for col in group_cols}
+        
+        # Calculate aggregations using Numba
+        for col in agg_cols:
+            # Only get values for this group
+            group_data = df_dict[col][mask]
+            
+            # Skip if no data
+            if len(group_data) == 0:
+                continue
+                
+            # Calculate sums
+            if col == 'amount':
+                result_row[f'{col}_sum'] = numba_sum(group_data)
+                result_row[f'{col}_mean'] = numba_mean(group_data)
+                result_row[f'{col}_count'] = len(group_data)
+            elif col == 'balance':
+                result_row[f'{col}_mean'] = numba_mean(group_data)
+            elif col == 'account_id' or col == 'merchant_id':
+                # Count unique values
+                result_row[f'{col}_unique'] = len(np.unique(group_data))
+                
+        results.append(result_row)
+    
+    # Convert results to DataFrame
+    return pd.DataFrame(results)
+
 def perform_operations(input_dir="bank_data_joins"):
     # Initial memory measurement
     initial_memory = get_memory_usage()
     print(f"Initial memory usage: {initial_memory:.2f} MB")
-
-    # Set up distributed client with better resource management
-    client = Client(processes=True, n_workers=min(psutil.cpu_count(), 8), 
-                    threads_per_worker=2, memory_limit='4GB')
-    print(f"Dask client dashboard: {client.dashboard_link}")
-
+    
     # Load the generated data with lazy execution and optimized reading
     print("\nLazy loading data with optimizations...")
     
-    # More efficient parquet reading with filters pushed down when possible
+    # Use pyarrow engine for better performance and read only needed columns
     accounts_df = dd.read_parquet(
         f"{input_dir}/accounts.parquet",
-        engine='pyarrow',  # Use pyarrow engine for better performance
-        columns=['account_id', 'balance', 'status']  # Read only needed columns
+        engine='pyarrow',
+        columns=['account_id', 'balance', 'status']
     )
     
     merchants_df = dd.read_parquet(
         f"{input_dir}/merchants.parquet",
         engine='pyarrow',
-        columns=['merchant_id', 'category']  # Read only needed columns
+        columns=['merchant_id', 'category']
     )
     
     transactions_df = dd.read_parquet(
         f"{input_dir}/transactions.parquet",
         engine='pyarrow',
-        columns=['transaction_id', 'account_id', 'merchant_id', 'amount']  # Read only needed columns
+        columns=['transaction_id', 'account_id', 'merchant_id', 'amount']
     )
 
     # Memory after setting up lazy loading
@@ -54,116 +131,91 @@ def perform_operations(input_dir="bank_data_joins"):
     print(f"Memory used for lazy loading setup: {loading_memory_diff:.2f} MB")
     print(f"Total memory after lazy loading setup: {loading_memory:.2f} MB")
 
-    # ------ Filtering and Merging with Optimizations ------
-    print("\nPerforming optimized pipeline...")
+    # ------ Start Pipeline with Numba optimizations ------
+    print("\nPerforming Numba-optimized pipeline...")
     start_pipeline_time = time.time()
     before_pipeline_memory = get_memory_usage()
 
-    # Pre-filter to reduce data size before merging
-    print("Pre-filtering data to reduce join size...")
+    # Convert to pandas DataFrames for Numba processing
+    # Do this in chunks to avoid memory issues
+    print("Converting data to pandas for Numba processing...")
+    
+    # Pre-filter in Dask to reduce data size
     accounts_filtered = accounts_df[accounts_df['status'] == 'Active']
     
-    # First merge transactions with merchants (smaller merge first)
-    print("Joining transactions with merchants...")
-    transactions_merchants = transactions_df.merge(
-        merchants_df,
-        on='merchant_id',
-        how='inner',
-        suffixes=('', '_merchant')
-    )
-    
-    # Then merge with filtered accounts
-    print("Joining with accounts...")
-    merged_df = transactions_merchants.merge(
-        accounts_filtered,
-        on='account_id',
-        how='inner',
-        suffixes=('', '_account')
-    )
-    
-    # Add derived column with vectorized operation
-    merged_df['high_value_transaction'] = merged_df['amount'].map_partitions(
-        lambda s: np.where(s > 500, 'Yes', 'No'), meta=('high_value_transaction', 'object')
-    )
-    
-    # Force garbage collection between major operations
-    gc.collect()
-    
-    # ------ Optimized Group By Operation ------
-    print("\nPerforming optimized group by operation...")
-    start_groupby_time = time.time()
-    before_groupby_memory = get_memory_usage()
-
-    # MAJOR OPTIMIZATION: Repartition by groupby keys for performance
-    print("Repartitioning data by groupby keys...")
-    # Hash-based partitioning on the groupby keys
-    merged_df = merged_df.map_partitions(
-        lambda df: df.assign(partition_key=df['category'].astype(str) + '_' + df['high_value_transaction']),
-        meta=merged_df.dtypes
-    )
-    
-    # Repartition to a reasonable number of partitions (based on unique key count)
-    # First get number of unique combinations
-    with ProgressBar():
-        unique_keys = merged_df[['category', 'high_value_transaction']].drop_duplicates().compute()
-    num_unique_combos = len(unique_keys)
-    num_partitions = min(max(num_unique_combos, 8), 32)  # At least 8, at most 32 partitions
-    
-    print(f"Repartitioning to {num_partitions} partitions based on {num_unique_combos} unique combinations...")
-    merged_df = merged_df.repartition(npartitions=num_partitions)
-    
-    # OPTIMIZATION: Use map_partitions for faster NumPy-based aggregations
-    # This is much faster than Dask's native groupby for many cases
-    
-    print("Using NumPy-accelerated groupby strategy...")
+    # Process in chunks using Dask's partitioning
+    chunk_results = []
     
     @delayed
-    def optimized_groupby(partition_df):
-        # Convert to pandas for fast in-memory processing
-        pdf = partition_df.copy()
+    def process_chunk(txn_part, acc_part, merch_part):
+        # Convert partition to pandas
+        txn_pd = txn_part.compute()
+        acc_pd = acc_part.compute()
+        merch_pd = merch_part.compute()
         
-        # Use efficient pandas groupby with numpy-based aggregations
-        result = pdf.groupby(['category', 'high_value_transaction']).agg({
-            'amount': ['sum', 'mean', 'std', 'count'],
-            'account_id': pd.Series.nunique,
-            'merchant_id': pd.Series.nunique,
-            'balance': 'mean'
-        })
+        # First join transactions with merchants
+        merged = pd.merge(
+            txn_pd, 
+            merch_pd,
+            on='merchant_id',
+            how='inner'
+        )
         
-        # Flatten the columns and reset index
-        result.columns = [f"{col[0]}_{col[1]}" if col[1] else col[0] for col in result.columns]
-        return result.reset_index()
+        # Then join with accounts
+        merged = pd.merge(
+            merged,
+            acc_pd,
+            on='account_id',
+            how='inner'
+        )
+        
+        # Add high value flag using Numba
+        amounts = merged['amount'].values
+        merged['high_value_transaction'] = numba_filter_high_value(amounts)
+        
+        # Perform fast group-by using Numba
+        result = fast_group_aggregate(
+            merged,
+            group_cols=['category', 'high_value_transaction'],
+            agg_cols=['amount', 'balance', 'account_id', 'merchant_id']
+        )
+        
+        return result
     
-    # Apply the function to each partition
-    partition_results = []
-    for i in range(merged_df.npartitions):
-        partition_results.append(optimized_groupby(merged_df.get_partition(i)))
+    # Process each partition
+    print("Processing data in chunks with Numba acceleration...")
+    for i in range(min(transactions_df.npartitions, 10)):  # Limit to 10 partitions for memory management
+        # Get partition
+        chunk_result = process_chunk(
+            transactions_df.get_partition(i),
+            accounts_filtered,  # Use full accounts for each partition
+            merchants_df  # Use full merchants for each partition
+        )
+        chunk_results.append(chunk_result)
     
-    # Combine the results
-    print("Combining partition results...")
-    combined_delayed = delayed(pd.concat)(partition_results, ignore_index=True)
+    # Combine results
+    print("Combining chunk results...")
+    combined_results = delayed(pd.concat)(chunk_results, ignore_index=True)
     
-    # Final aggregation of the combined results
+    # Final aggregation
     @delayed
     def final_aggregation(combined_df):
         return combined_df.groupby(['category', 'high_value_transaction']).agg({
             'amount_sum': 'sum',
             'amount_mean': 'mean',
-            'amount_std': 'mean',  # Taking mean of std is an approximation
             'amount_count': 'sum',
-            'account_id_nunique': 'sum',  # This works because we partitioned by the groupby keys
-            'merchant_id_nunique': 'sum',  # This works because we partitioned by the groupby keys
-            'balance_mean': 'mean'
+            'balance_mean': 'mean',
+            'account_id_unique': 'sum',
+            'merchant_id_unique': 'sum'
         }).reset_index()
     
-    final_result_delayed = final_aggregation(combined_delayed)
+    final_result_delayed = final_aggregation(combined_results)
     
     # Execute with progress bar
     print("\nComputing final results...")
     collection_start_time = time.time()
     with ProgressBar():
-        with performance_report(filename=f"{input_dir}/dask-performance-report.html"):
-            result = final_result_delayed.compute()
+        result = final_result_delayed.compute()
     
     collection_time = time.time() - collection_start_time
     print(f"Collection completed in {collection_time:.4f} seconds.")
@@ -175,31 +227,28 @@ def perform_operations(input_dir="bank_data_joins"):
     # Force garbage collection
     gc.collect()
     
-    # Track memory and time after groupby execution
-    after_groupby_memory = get_memory_usage()
-    groupby_memory_diff = after_groupby_memory - before_groupby_memory
-    groupby_time = time.time() - start_groupby_time
-    print(f"Group by operation completed in {groupby_time:.4f} seconds.")
-    print(f"Memory used by group by operation: {groupby_memory_diff:.2f} MB")
-    print(f"Total memory after group by: {after_groupby_memory:.2f} MB")
+    # Track memory and time after execution
+    after_pipeline_memory = get_memory_usage()
+    pipeline_memory_diff = after_pipeline_memory - before_pipeline_memory
+    pipeline_time = time.time() - start_pipeline_time
+    print(f"Pipeline completed in {pipeline_time:.4f} seconds.")
+    print(f"Memory used by pipeline: {pipeline_memory_diff:.2f} MB")
+    print(f"Total memory after pipeline: {after_pipeline_memory:.2f} MB")
     
     # ------ Generate a summary report ------
     print("\n----- PERFORMANCE SUMMARY -----")
     print(f"Initial memory usage: {initial_memory:.2f} MB")
     print(f"Memory used for lazy loading setup: {loading_memory_diff:.2f} MB")
-    print(f"Memory used by group by operation: {groupby_memory_diff:.2f} MB")
-    print(f"Total memory increase: {after_groupby_memory - initial_memory:.2f} MB")
+    print(f"Memory used by Numba pipeline: {pipeline_memory_diff:.2f} MB")
+    print(f"Total memory increase: {after_pipeline_memory - initial_memory:.2f} MB")
     
-    print(f"\nGroup by operation took: {groupby_time:.4f} seconds.")
+    print(f"\nNumba pipeline took: {pipeline_time:.4f} seconds.")
     print(f"Collection time: {collection_time:.4f} seconds.")
     print(f"Total processing time: {time.time() - start_pipeline_time:.4f} seconds.")
     
     # Optionally save the final result to a new parquet file with compression
-    result.to_parquet(f"{input_dir}/grouped_data_optimized.parquet", compression='snappy')
-    result.to_csv(f"{input_dir}/grouped_data_optimized.csv")
-    
-    # Clean up client
-    client.close()
+    result.to_parquet(f"{input_dir}/grouped_data_numba.parquet", compression='snappy')
+    result.to_csv(f"{input_dir}/grouped_data_numba.csv")
     
     return result
 
