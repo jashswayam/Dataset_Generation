@@ -1,101 +1,123 @@
 import dask.dataframe as dd
-import numpy as np
 import psutil
 import time
+import gc
 import numba
-from numba import jit
-from dask.diagnostics import ProgressBar
-from dask import delayed
+import numpy as np
+from distributed import Client
 
 def get_memory_usage():
     """Returns the current memory usage in MB."""
-    return psutil.Process().memory_info().rss / 1024 / 1024  # Memory in MB
+    process = psutil.Process()
+    memory_info = process.memory_info()
+    return memory_info.rss / 1024 / 1024  # Convert bytes to MB
 
-# Numba optimized functions
-@jit(nopython=True, parallel=True)
-def numba_sum(arr):
-    return np.sum(arr)
-
-@jit(nopython=True, parallel=True)
-def numba_mean(arr):
-    return np.mean(arr)
-
-@jit(nopython=True)
-def numba_count_unique(arr):
-    return len(set(arr))
-
-@jit(nopython=True)
-def numba_filter_high_value(amounts, threshold=500):
-    """Returns a NumPy array of Yes/No strings based on amount threshold."""
-    result = np.empty(len(amounts), dtype='<U3')
-    for i in range(len(amounts)):
-        result[i] = 'Yes' if amounts[i] > threshold else 'No'
-    return result
-
-# Fast group-by aggregation
-def fast_group_aggregate(df, group_cols, agg_cols):
-    """Perform fast group-by aggregation using Numba & Dask."""
-    df_grouped = df.groupby(group_cols).agg(
-        amount_sum=('amount', 'sum'),
-        amount_mean=('amount', 'mean'),
-        amount_count=('amount', 'count'),
-        balance_mean=('balance', 'mean'),
-        account_id_unique=('account_id', 'nunique'),
-        merchant_id_unique=('merchant_id', 'nunique')
-    ).reset_index()
-    
-    return df_grouped
+@numba.njit
+def mark_high_value_transaction(amount):
+    """Numba-optimized function to classify high-value transactions."""
+    return "Yes" if amount > 500 else "No"
 
 def perform_operations(input_dir="bank_data_joins"):
-    """Main function to process data using Dask & Numba."""
     initial_memory = get_memory_usage()
     print(f"Initial memory usage: {initial_memory:.2f} MB")
 
-    print("\nLoading data using Dask...")
-    accounts_df = dd.read_parquet(f"{input_dir}/accounts.parquet", columns=['account_id', 'balance', 'status'])
-    merchants_df = dd.read_parquet(f"{input_dir}/merchants.parquet", columns=['merchant_id', 'category'])
-    transactions_df = dd.read_parquet(f"{input_dir}/transactions.parquet", columns=['transaction_id', 'account_id', 'merchant_id', 'amount'])
+    # Load the generated data with lazy execution
+    print("\nLazy loading data...")
+    accounts_df = dd.read_parquet(f"{input_dir}/accounts.parquet")
+    merchants_df = dd.read_parquet(f"{input_dir}/merchants.parquet")
+    transactions_df = dd.read_parquet(f"{input_dir}/transactions.parquet")
 
-    print("\nFiltering active accounts...")
-    accounts_filtered = accounts_df[accounts_df['status'] == 'Active']
+    loading_memory = get_memory_usage()
+    print(f"Memory after lazy loading: {loading_memory:.2f} MB")
 
-    print("\nProcessing transactions in parallel...")
+    # ------ Merging Operation ------
+    print("\nPerforming merging operation...")
+    start_merge_time = time.time()
 
-    @delayed
-    def process_chunk(txn_part):
-        """Processes a chunk of transactions."""
-        txn_pd = txn_part.compute()
-        
-        merged = txn_pd.merge(merchants_df.compute(), on='merchant_id', how='inner')
-        merged = merged.merge(accounts_filtered.compute(), on='account_id', how='inner')
+    accounts_transactions = accounts_df.merge(transactions_df, 
+                                              left_on='account_id', 
+                                              right_on='account_id', 
+                                              how='inner')
 
-        merged['high_value_transaction'] = numba_filter_high_value(merged['amount'].values)
+    merged_df = accounts_transactions.merge(merchants_df, 
+                                            left_on='merchant_id', 
+                                            right_on='merchant_id', 
+                                            how='inner')
 
-        return fast_group_aggregate(
-            merged,
-            group_cols=['category', 'high_value_transaction'],
-            agg_cols=['amount', 'balance', 'account_id', 'merchant_id']
-        )
+    # Convert amount to NumPy for fast computation
+    print("Applying optimized transaction classification...")
+    merged_df['high_value_transaction'] = merged_df['amount'].map_partitions(
+        lambda x: np.array([mark_high_value_transaction(a) for a in x.to_numpy()], dtype=str),
+        meta=('amount', 'str')
+    )
 
-    chunk_results = [process_chunk(partition) for partition in transactions_df.to_delayed()[:10]]
+    after_merging_memory = get_memory_usage()
+    print(f"Memory after merging: {after_merging_memory:.2f} MB")
 
-    print("\nCombining chunk results...")
-    combined_results = dd.from_delayed(chunk_results)
+    # ------ Group By Operation ------
+    print("\nPerforming optimized group by operation...")
+    start_groupby_time = time.time()
 
-    print("\nComputing final results...")
-    with ProgressBar():
-        final_result = combined_results.compute()
+    # Optimize groupby by reducing partitions first
+    partitions = min(merged_df.npartitions, 32)
+    merged_df = merged_df.repartition(npartitions=partitions)
 
-    print("\nSample output:")
-    print(final_result.head())
+    basic_grouped_df = merged_df.groupby(
+        ['category', 'high_value_transaction'],
+        sort=False  # Disabling sorting speeds up the operation
+    ).agg({
+        'amount': 'sum',
+        'transaction_id': 'count',
+        'balance': 'mean'
+    }).reset_index()
 
-    final_memory = get_memory_usage()
-    print(f"\nMemory after processing: {final_memory:.2f} MB")
+    # Execute the lazy chain for aggregations
+    print("\nCollecting results...")
+    collection_start_time = time.time()
 
-    final_result.to_parquet(f"{input_dir}/grouped_data_numba.parquet", compression='snappy')
-    final_result.to_csv(f"{input_dir}/grouped_data_numba.csv")
+    # Use a distributed client for efficiency
+    try:
+        client = Client.current() or Client(processes=False, threads_per_worker=4)
+        print(f"Using dask client with {len(client.scheduler_info()['workers'])} workers")
+        basic_result = basic_grouped_df.compute()
+    except:
+        print("Using regular compute (no distributed client)")
+        basic_result = basic_grouped_df.compute()
 
-    return final_result
+    # Compute unique counts separately with optimizations
+    print("Computing unique counts...")
+
+    unique_account_df = merged_df[['category', 'high_value_transaction', 'account_id']].drop_duplicates()
+    unique_merchant_df = merged_df[['category', 'high_value_transaction', 'merchant_id']].drop_duplicates()
+
+    unique_accounts = unique_account_df.groupby(['category', 'high_value_transaction']).size().compute()
+    unique_merchants = unique_merchant_df.groupby(['category', 'high_value_transaction']).size().compute()
+
+    # Convert to DataFrames
+    unique_accounts = unique_accounts.to_frame('unique_accounts')
+    unique_merchants = unique_merchants.to_frame('unique_merchants')
+
+    # Merge results
+    result = basic_result.merge(unique_accounts, on=['category', 'high_value_transaction']) \
+                         .merge(unique_merchants, on=['category', 'high_value_transaction'])
+
+    collection_time = time.time() - collection_start_time
+    print(f"Collection completed in {collection_time:.4f} seconds.")
+
+    print("\nSample of the result:")
+    print(result.head(5))
+
+    # ------ Generate a summary report ------
+    print("\n----- PERFORMANCE SUMMARY -----")
+    print(f"Initial memory usage: {initial_memory:.2f} MB")
+    print(f"Memory after merging: {after_merging_memory:.2f} MB")
+    print(f"Collection time: {collection_time:.4f} seconds.")
+
+    # Save the final result
+    result.to_parquet(f"{input_dir}/grouped_data.parquet")
+    result.to_csv(f"{input_dir}/grouped_data.csv")
+
+    return result
 
 if __name__ == "__main__":
     perform_operations()
