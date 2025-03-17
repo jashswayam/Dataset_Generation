@@ -1,8 +1,8 @@
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, sum as spark_sum, count as spark_count, avg, lit, when, countDistinct
 import psutil
 import time
 import gc
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, when, lit
 
 def get_memory_usage():
     """
@@ -17,59 +17,90 @@ def perform_operations(input_dir="bank_data_joins"):
     initial_memory = get_memory_usage()
     print(f"Initial memory usage: {initial_memory:.2f} MB")
     
-    # Initialize Spark session
+    # Create a Spark session
+    print("\nCreating Spark session and loading data...")
     spark = SparkSession.builder \
-        .appName("BankDataOperations") \
-        .config("spark.memory.offHeap.enabled", "true") \
-        .config("spark.memory.offHeap.size", "2g") \
+        .appName("BankDataAnalysis") \
+        .config("spark.sql.execution.arrow.pyspark.enabled", "true") \
+        .config("spark.sql.shuffle.partitions", "8") \
         .getOrCreate()
     
-    # Load the generated CSV data
-    print("\nLoading data...")
-    accounts_df = spark.read.csv(f"{input_dir}/accounts.csv", header=True, inferSchema=True)
-    merchants_df = spark.read.csv(f"{input_dir}/merchants.csv", header=True, inferSchema=True)
-    transactions_df = spark.read.csv(f"{input_dir}/transactions.csv", header=True, inferSchema=True)
-
-    # Cache the DataFrames to improve performance for multiple operations
+    # Load the generated data
+    accounts_df = spark.read.parquet(f"{input_dir}/accounts.parquet")
+    merchants_df = spark.read.parquet(f"{input_dir}/merchants.parquet")
+    transactions_df = spark.read.parquet(f"{input_dir}/transactions.parquet")
+    
+    # Cache the DataFrames to improve performance
     accounts_df.cache()
     merchants_df.cache()
     transactions_df.cache()
     
-    # Memory after loading data
+    # Memory after loading
     loading_memory = get_memory_usage()
     loading_memory_diff = loading_memory - initial_memory
-    print(f"Memory used for loading data: {loading_memory_diff:.2f} MB")
+    print(f"Memory used for loading: {loading_memory_diff:.2f} MB")
     print(f"Total memory after loading: {loading_memory:.2f} MB")
     
-    # Start tracking time
-    start_time = time.time()
-
-    # ------ Filtering Operation ------
-    print("\nPerforming filtering operation...")
-    before_filtering_memory = get_memory_usage()
-    filtered_accounts = accounts_df.filter(col("balance") > 10000)
-    # Force execution with count() to measure accurate time
-    filtered_count = filtered_accounts.count()
+    # ------ Filtering Operation (Standalone) ------
+    print("\nPerforming filtering operation (Standalone)...")
+    start_filter_time = time.time()
+    before_filter_memory = get_memory_usage()
     
-    # Force garbage collection to get accurate memory difference
+    # Standalone filtering for accounts
+    print("Filtering accounts...")
+    filtered_accounts = accounts_df.filter(
+        (col('balance') > 10000) & 
+        (col('status') == 'Active')
+    )
+    
+    # Count rows to materialize the result
+    filtered_count = filtered_accounts.count()
+    print(f"Filtered accounts count: {filtered_count}")
+    
+    # Force garbage collection
     gc.collect()
     
     # Track memory and time after filtering
-    after_filtering_memory = get_memory_usage()
-    filtering_memory_diff = after_filtering_memory - before_filtering_memory
-    filter_time = time.time() - start_time
-    print(f"Filtering operation completed in {filter_time:.4f} seconds.")
-    print(f"Filtered {filtered_count} accounts.")
-    print(f"Memory used by filtering operation: {filtering_memory_diff:.2f} MB")
-    print(f"Total memory after filtering: {after_filtering_memory:.2f} MB")
-
-    # ------ Merging Operation ------
-    print("\nPerforming merging operation...")
+    after_filter_memory = get_memory_usage()
+    filter_memory_diff = after_filter_memory - before_filter_memory
+    filter_time = time.time() - start_filter_time
+    print(f"Filtering operations completed in {filter_time:.4f} seconds.")
+    print(f"Memory used by filtering operations: {filter_memory_diff:.2f} MB")
+    print(f"Total memory after filtering: {after_filter_memory:.2f} MB")
+    
+    # ------ Merging Operation (Completely Separate) ------
+    print("\nPerforming merging operation (without filtering)...")
+    start_merge_time = time.time()
     before_merging_memory = get_memory_usage()
-    merged_df = filtered_accounts.join(transactions_df, "account_id", "inner")
-    merged_df = merged_df.join(merchants_df, "merchant_id", "inner")
-    # Force execution to measure accurate time
+    
+    # First join accounts with transactions
+    print("Joining accounts with transactions...")
+    accounts_transactions = accounts_df.join(
+        transactions_df, 
+        on='account_id', 
+        how='inner'
+    )
+    
+    # Then join with merchants
+    print("Joining with merchants...")
+    merged_df = accounts_transactions.join(
+        merchants_df, 
+        on='merchant_id', 
+        how='inner'
+    )
+    
+    # Add derived column
+    merged_df = merged_df.withColumn(
+        'high_value_transaction',
+        when(col('amount') > 500, 'Yes').otherwise('No')
+    )
+    
+    # Cache the merged DataFrame
+    merged_df.cache()
+    
+    # Materialize the merged DataFrame
     merged_count = merged_df.count()
+    print(f"Merged rows count: {merged_count}")
     
     # Force garbage collection
     gc.collect()
@@ -77,53 +108,74 @@ def perform_operations(input_dir="bank_data_joins"):
     # Track memory and time after merging
     after_merging_memory = get_memory_usage()
     merging_memory_diff = after_merging_memory - before_merging_memory
-    merge_time = time.time() - start_time
+    merge_time = time.time() - start_merge_time
     print(f"Merging operation completed in {merge_time:.4f} seconds.")
-    print(f"Merged dataframe has {merged_count} rows.")
     print(f"Memory used by merging operation: {merging_memory_diff:.2f} MB")
     print(f"Total memory after merging: {after_merging_memory:.2f} MB")
 
-    # ------ Conditional Operation ------
-    print("\nPerforming conditional operation...")
-    before_conditional_memory = get_memory_usage()
-    merged_df = merged_df.withColumn(
-        "high_value_transaction", 
-        when(col("amount") > 500, lit("Yes")).otherwise(lit("No"))
+    # ------ Group By Operation ------
+    print("\nPerforming group by operation...")
+    start_groupby_time = time.time()
+    before_groupby_memory = get_memory_usage()
+    
+    # Define a groupby operation
+    grouped_df = merged_df.groupBy([
+        'category',  # Using merchant category
+        'high_value_transaction'
+    ]).agg(
+        spark_sum('amount').alias('total_amount'),
+        spark_count('transaction_id').alias('transaction_count'),
+        avg('balance').alias('avg_balance'),
+        countDistinct('account_id').alias('unique_accounts'),
+        countDistinct('merchant_id').alias('unique_merchants')
     )
-    # Force execution to measure accurate time
-    final_count = merged_df.count()
+    
+    # Execute the groupby and materialize the results
+    print("\nCollecting results...")
+    collection_start_time = time.time()
+    result = grouped_df.collect()
+    collection_time = time.time() - collection_start_time
+    print(f"Collection completed in {collection_time:.4f} seconds.")
+    
+    # Convert the result to a DataFrame and display sample
+    result_df = spark.createDataFrame(result)
+    print("\nSample of the result:")
+    result_df.show(5)
     
     # Force garbage collection
     gc.collect()
     
-    # Track memory and time after conditional operations
-    after_conditional_memory = get_memory_usage()
-    conditional_memory_diff = after_conditional_memory - before_conditional_memory
-    condition_time = time.time() - start_time
-    print(f"Conditional operation completed in {condition_time:.4f} seconds.")
-    print(f"Final dataframe has {final_count} rows.")
-    print(f"Memory used by conditional operation: {conditional_memory_diff:.2f} MB")
-    print(f"Total memory after conditional operation: {after_conditional_memory:.2f} MB")
+    # Track memory and time after groupby execution
+    after_groupby_memory = get_memory_usage()
+    groupby_memory_diff = after_groupby_memory - before_groupby_memory
+    groupby_time = time.time() - start_groupby_time
+    print(f"Group by operation completed in {groupby_time:.4f} seconds.")
+    print(f"Memory used by group by operation: {groupby_memory_diff:.2f} MB")
+    print(f"Total memory after group by: {after_groupby_memory:.2f} MB")
 
     # ------ Generate a summary report ------
     print("\n----- PERFORMANCE SUMMARY -----")
     print(f"Initial memory usage: {initial_memory:.2f} MB")
-    print(f"Memory used for loading data: {loading_memory_diff:.2f} MB")
-    print(f"Memory used by filtering operation: {filtering_memory_diff:.2f} MB")
-    print(f"Memory used by merging operation: {merging_memory_diff:.2f} MB")
-    print(f"Memory used by conditional operation: {conditional_memory_diff:.2f} MB")
-    print(f"Total memory increase: {after_conditional_memory - initial_memory:.2f} MB")
+    print(f"Memory used for loading: {loading_memory_diff:.2f} MB")
+    print(f"Memory used by filtering operation (standalone): {filter_memory_diff:.2f} MB")
+    print(f"Memory used by merging operation (separate): {merging_memory_diff:.2f} MB")
+    print(f"Memory used by group by operation: {groupby_memory_diff:.2f} MB")
+    print(f"Total memory increase: {after_groupby_memory - initial_memory:.2f} MB")
     
     print(f"\nFiltering operation took: {filter_time:.4f} seconds.")
-    print(f"Merging operation took: {merge_time - filter_time:.4f} seconds.")
-    print(f"Conditional operation took: {condition_time - merge_time:.4f} seconds.")
-    print(f"Total processing time: {condition_time:.4f} seconds.")
+    print(f"Merging operation took: {merge_time:.4f} seconds.")
+    print(f"Group by operation took: {groupby_time:.4f} seconds.")
+    print(f"Collection time: {collection_time:.4f} seconds.")
+    print(f"Total processing time: {time.time() - start_filter_time:.4f} seconds.")
     
-    # Optionally save the final result to a new CSV file
-    merged_df.write.csv(f"{input_dir}/merged_data_spark", header=True, mode="overwrite")
+    # Save the final result to parquet and CSV
+    result_df.write.mode("overwrite").parquet(f"{input_dir}/grouped_data.parquet")
+    result_df.write.mode("overwrite").option("header", "true").csv(f"{input_dir}/grouped_data_csv")
     
     # Stop the Spark session
     spark.stop()
+    
+    return result_df
 
 if __name__ == "__main__":
     perform_operations()
