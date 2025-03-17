@@ -90,24 +90,43 @@ def perform_operations(input_dir="bank_data_joins"):
     before_groupby_memory = get_memory_usage()
     
     # Define a groupby operation in the lazy chain
-    # Create custom 'nunique' aggregation for Dask
-    def count_unique(series):
-        # Return number of unique items
-        return series.nunique()
-    
-    # Define explicit aggregations
-    grouped_df = merged_df.groupby(['category', 'high_value_transaction']).agg({
+    # Split aggregations to avoid nunique issues
+    print("Performing standard aggregations...")
+    basic_grouped_df = merged_df.groupby(['category', 'high_value_transaction']).agg({
         'amount': 'sum',
         'transaction_id': 'count',
-        'balance': 'mean',
-        'account_id': count_unique,  # Custom function instead of 'nunique'
-        'merchant_id': count_unique   # Custom function instead of 'nunique'
-    }).reset_index()  # Reset index to make it a flat DataFrame for easier display
+        'balance': 'mean'
+    }).reset_index()
     
-    # Execute the lazy chain and materialize the results
-    print("\nCollecting results...")
+    # Execute the lazy chain for basic aggregations
+    print("\nCollecting basic aggregation results...")
     collection_start_time = time.time()
-    result = grouped_df.compute()  # This triggers the actual computation
+    basic_result = basic_grouped_df.compute()
+    
+    # Now handle unique counts separately (after computation)
+    print("Computing unique counts...")
+    # Get unique counts by group using pandas methods on the computed result
+    unique_accounts = merged_df.groupby(['category', 'high_value_transaction'])['account_id'].apply(
+        lambda x: x.drop_duplicates().count(), meta=('account_id', 'int64')
+    ).compute()
+    
+    unique_merchants = merged_df.groupby(['category', 'high_value_transaction'])['merchant_id'].apply(
+        lambda x: x.drop_duplicates().count(), meta=('merchant_id', 'int64')
+    ).compute()
+    
+    # Convert to pandas Series with MultiIndex
+    unique_accounts = unique_accounts.to_frame('unique_accounts')
+    unique_merchants = unique_merchants.to_frame('unique_merchants')
+    
+    # Merge the results
+    result = basic_result.merge(
+        unique_accounts, 
+        on=['category', 'high_value_transaction']
+    ).merge(
+        unique_merchants,
+        on=['category', 'high_value_transaction']
+    )
+    
     collection_time = time.time() - collection_start_time
     print(f"Collection completed in {collection_time:.4f} seconds.")
     
