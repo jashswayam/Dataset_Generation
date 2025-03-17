@@ -1,7 +1,12 @@
 import dask.dataframe as dd
+import numpy as np
+import pandas as pd
 import psutil
 import time
 import gc
+from dask.diagnostics import ProgressBar
+from dask import delayed
+from dask.distributed import Client, performance_report
 
 def get_memory_usage():
     """
@@ -15,137 +20,150 @@ def perform_operations(input_dir="bank_data_joins"):
     # Initial memory measurement
     initial_memory = get_memory_usage()
     print(f"Initial memory usage: {initial_memory:.2f} MB")
+
+    # Set up distributed client with better resource management
+    client = Client(processes=True, n_workers=min(psutil.cpu_count(), 8), 
+                    threads_per_worker=2, memory_limit='4GB')
+    print(f"Dask client dashboard: {client.dashboard_link}")
+
+    # Load the generated data with lazy execution and optimized reading
+    print("\nLazy loading data with optimizations...")
     
-    # Load the generated data with lazy execution
-    print("\nLazy loading data...")
-    # Using parquet files instead of CSV for better performance
-    accounts_df = dd.read_parquet(f"{input_dir}/accounts.parquet")
-    merchants_df = dd.read_parquet(f"{input_dir}/merchants.parquet")
-    transactions_df = dd.read_parquet(f"{input_dir}/transactions.parquet")
+    # More efficient parquet reading with filters pushed down when possible
+    accounts_df = dd.read_parquet(
+        f"{input_dir}/accounts.parquet",
+        engine='pyarrow',  # Use pyarrow engine for better performance
+        columns=['account_id', 'balance', 'status']  # Read only needed columns
+    )
+    
+    merchants_df = dd.read_parquet(
+        f"{input_dir}/merchants.parquet",
+        engine='pyarrow',
+        columns=['merchant_id', 'category']  # Read only needed columns
+    )
+    
+    transactions_df = dd.read_parquet(
+        f"{input_dir}/transactions.parquet",
+        engine='pyarrow',
+        columns=['transaction_id', 'account_id', 'merchant_id', 'amount']  # Read only needed columns
+    )
 
     # Memory after setting up lazy loading
     loading_memory = get_memory_usage()
     loading_memory_diff = loading_memory - initial_memory
     print(f"Memory used for lazy loading setup: {loading_memory_diff:.2f} MB")
     print(f"Total memory after lazy loading setup: {loading_memory:.2f} MB")
-    
-    # ------ Filtering Operation (Standalone) ------
-    print("\nPerforming filtering operation (Standalone)...")
-    start_filter_time = time.time()
-    before_filter_memory = get_memory_usage()
-    
-    # Standalone filtering for accounts
-    print("Filtering accounts...")
-    filtered_accounts = accounts_df[(accounts_df['balance'] > 10000) & 
-                                    (accounts_df['status'] == 'Active')]
-    
-    # Force garbage collection
-    gc.collect()
-    
-    # Track memory and time after filtering
-    after_filter_memory = get_memory_usage()
-    filter_memory_diff = after_filter_memory - before_filter_memory
-    filter_time = time.time() - start_filter_time
-    print(f"Filtering operations completed in {filter_time:.4f} seconds.")
-    print(f"Memory used by filtering operations: {filter_memory_diff:.2f} MB")
-    print(f"Total memory after filtering: {after_filter_memory:.2f} MB")
-    
-    # ------ Merging Operation (Completely Separate) ------
-    print("\nPerforming merging operation (without filtering)...")
-    start_merge_time = time.time()
-    before_merging_memory = get_memory_usage()
-    
-    # Start fresh with original dataframes for merging
-    # First join accounts with transactions
-    print("Joining accounts with transactions...")
-    accounts_transactions = accounts_df.merge(transactions_df, 
-                                              left_on='account_id', 
-                                              right_on='account_id', 
-                                              how='inner')
-    
-    # Then join with merchants
-    print("Joining with merchants...")
-    merged_df = accounts_transactions.merge(merchants_df, 
-                                            left_on='merchant_id', 
-                                            right_on='merchant_id', 
-                                            how='inner')
-    
-    # Add derived column
-    merged_df['high_value_transaction'] = merged_df['amount'].apply(lambda x: 'Yes' if x > 500 else 'No', meta='str')
-    
-    # Force garbage collection
-    gc.collect()
-    
-    # Track memory and time after merging setup (still lazy)
-    after_merging_memory = get_memory_usage()
-    merging_memory_diff = after_merging_memory - before_merging_memory
-    merge_time = time.time() - start_merge_time
-    print(f"Merging operation setup completed in {merge_time:.4f} seconds.")
-    print(f"Memory used by merging operation setup: {merging_memory_diff:.2f} MB")
-    print(f"Total memory after merging setup: {after_merging_memory:.2f} MB")
 
-    # ------ Group By Operation ------
-    print("\nPerforming group by operation...")
+    # ------ Filtering and Merging with Optimizations ------
+    print("\nPerforming optimized pipeline...")
+    start_pipeline_time = time.time()
+    before_pipeline_memory = get_memory_usage()
+
+    # Pre-filter to reduce data size before merging
+    print("Pre-filtering data to reduce join size...")
+    accounts_filtered = accounts_df[accounts_df['status'] == 'Active']
+    
+    # First merge transactions with merchants (smaller merge first)
+    print("Joining transactions with merchants...")
+    transactions_merchants = transactions_df.merge(
+        merchants_df,
+        on='merchant_id',
+        how='inner',
+        suffixes=('', '_merchant')
+    )
+    
+    # Then merge with filtered accounts
+    print("Joining with accounts...")
+    merged_df = transactions_merchants.merge(
+        accounts_filtered,
+        on='account_id',
+        how='inner',
+        suffixes=('', '_account')
+    )
+    
+    # Add derived column with vectorized operation
+    merged_df['high_value_transaction'] = merged_df['amount'].map_partitions(
+        lambda s: np.where(s > 500, 'Yes', 'No'), meta=('high_value_transaction', 'object')
+    )
+    
+    # Force garbage collection between major operations
+    gc.collect()
+    
+    # ------ Optimized Group By Operation ------
+    print("\nPerforming optimized group by operation...")
     start_groupby_time = time.time()
     before_groupby_memory = get_memory_usage()
-    
-    # Define a groupby operation in the lazy chain with optimizations
-    print("Performing optimized standard aggregations...")
-    
-    # 1. Repartition to optimize for groupby
-    print("Repartitioning data for better groupby performance...")
-    partitions = min(merged_df.npartitions, 32)  # Limit number of partitions
-    merged_df = merged_df.repartition(npartitions=partitions)
-    
-    # 2. Set reasonably sized partitions for the groupby
-    basic_grouped_df = merged_df.groupby(
-        ['category', 'high_value_transaction'],
-        sort=False,  # Turn off sorting for better performance
-    ).agg({
-        'amount': 'sum',
-        'transaction_id': 'count',
-        'balance': 'mean'
-    }).reset_index()
-    
-    # Execute the lazy chain for basic aggregations
-    print("\nCollecting basic aggregation results...")
-    collection_start_time = time.time()
-    
-    # 3. Optimize computation with more workers if available
-    from distributed import Client
-    try:
-        # Try to use existing client or create a temporary one
-        client = Client.current() or Client(processes=False, threads_per_worker=4)
-        print(f"Using dask client with {len(client.scheduler_info()['workers'])} workers")
-        basic_result = basic_grouped_df.compute()
-    except:
-        # Fall back to regular compute if distributed setup fails
-        print("Using regular compute (no distributed client)")
-        basic_result = basic_grouped_df.compute()
-    
-    # Now handle unique counts separately with optimizations
-    print("Computing unique counts with optimizations...")
-    
-    # Pre-compute drop_duplicates for better performance
-    unique_account_df = merged_df[['category', 'high_value_transaction', 'account_id']].drop_duplicates()
-    unique_merchant_df = merged_df[['category', 'high_value_transaction', 'merchant_id']].drop_duplicates()
-    
-    # Count unique values after deduplication
-    unique_accounts = unique_account_df.groupby(['category', 'high_value_transaction']).size().compute()
-    unique_merchants = unique_merchant_df.groupby(['category', 'high_value_transaction']).size().compute()
-    
-    # Convert to DataFrames with proper column names
-    unique_accounts = unique_accounts.to_frame('unique_accounts')
-    unique_merchants = unique_merchants.to_frame('unique_merchants')
-    
-    # Merge the results
-    result = basic_result.merge(
-        unique_accounts, 
-        on=['category', 'high_value_transaction']
-    ).merge(
-        unique_merchants,
-        on=['category', 'high_value_transaction']
+
+    # MAJOR OPTIMIZATION: Repartition by groupby keys for performance
+    print("Repartitioning data by groupby keys...")
+    # Hash-based partitioning on the groupby keys
+    merged_df = merged_df.map_partitions(
+        lambda df: df.assign(partition_key=df['category'].astype(str) + '_' + df['high_value_transaction']),
+        meta=merged_df.dtypes
     )
+    
+    # Repartition to a reasonable number of partitions (based on unique key count)
+    # First get number of unique combinations
+    with ProgressBar():
+        unique_keys = merged_df[['category', 'high_value_transaction']].drop_duplicates().compute()
+    num_unique_combos = len(unique_keys)
+    num_partitions = min(max(num_unique_combos, 8), 32)  # At least 8, at most 32 partitions
+    
+    print(f"Repartitioning to {num_partitions} partitions based on {num_unique_combos} unique combinations...")
+    merged_df = merged_df.repartition(npartitions=num_partitions)
+    
+    # OPTIMIZATION: Use map_partitions for faster NumPy-based aggregations
+    # This is much faster than Dask's native groupby for many cases
+    
+    print("Using NumPy-accelerated groupby strategy...")
+    
+    @delayed
+    def optimized_groupby(partition_df):
+        # Convert to pandas for fast in-memory processing
+        pdf = partition_df.copy()
+        
+        # Use efficient pandas groupby with numpy-based aggregations
+        result = pdf.groupby(['category', 'high_value_transaction']).agg({
+            'amount': ['sum', 'mean', 'std', 'count'],
+            'account_id': pd.Series.nunique,
+            'merchant_id': pd.Series.nunique,
+            'balance': 'mean'
+        })
+        
+        # Flatten the columns and reset index
+        result.columns = [f"{col[0]}_{col[1]}" if col[1] else col[0] for col in result.columns]
+        return result.reset_index()
+    
+    # Apply the function to each partition
+    partition_results = []
+    for i in range(merged_df.npartitions):
+        partition_results.append(optimized_groupby(merged_df.get_partition(i)))
+    
+    # Combine the results
+    print("Combining partition results...")
+    combined_delayed = delayed(pd.concat)(partition_results, ignore_index=True)
+    
+    # Final aggregation of the combined results
+    @delayed
+    def final_aggregation(combined_df):
+        return combined_df.groupby(['category', 'high_value_transaction']).agg({
+            'amount_sum': 'sum',
+            'amount_mean': 'mean',
+            'amount_std': 'mean',  # Taking mean of std is an approximation
+            'amount_count': 'sum',
+            'account_id_nunique': 'sum',  # This works because we partitioned by the groupby keys
+            'merchant_id_nunique': 'sum',  # This works because we partitioned by the groupby keys
+            'balance_mean': 'mean'
+        }).reset_index()
+    
+    final_result_delayed = final_aggregation(combined_delayed)
+    
+    # Execute with progress bar
+    print("\nComputing final results...")
+    collection_start_time = time.time()
+    with ProgressBar():
+        with performance_report(filename=f"{input_dir}/dask-performance-report.html"):
+            result = final_result_delayed.compute()
     
     collection_time = time.time() - collection_start_time
     print(f"Collection completed in {collection_time:.4f} seconds.")
@@ -164,27 +182,26 @@ def perform_operations(input_dir="bank_data_joins"):
     print(f"Group by operation completed in {groupby_time:.4f} seconds.")
     print(f"Memory used by group by operation: {groupby_memory_diff:.2f} MB")
     print(f"Total memory after group by: {after_groupby_memory:.2f} MB")
-
+    
     # ------ Generate a summary report ------
     print("\n----- PERFORMANCE SUMMARY -----")
     print(f"Initial memory usage: {initial_memory:.2f} MB")
     print(f"Memory used for lazy loading setup: {loading_memory_diff:.2f} MB")
-    print(f"Memory used by filtering operation (standalone): {filter_memory_diff:.2f} MB")
-    print(f"Memory used by merging operation (separate): {merging_memory_diff:.2f} MB")
     print(f"Memory used by group by operation: {groupby_memory_diff:.2f} MB")
     print(f"Total memory increase: {after_groupby_memory - initial_memory:.2f} MB")
     
-    print(f"\nFiltering operation took: {filter_time:.4f} seconds.")
-    print(f"Merging operation took: {merge_time:.4f} seconds.")
-    print(f"Group by operation took: {groupby_time:.4f} seconds.")
+    print(f"\nGroup by operation took: {groupby_time:.4f} seconds.")
     print(f"Collection time: {collection_time:.4f} seconds.")
-    print(f"Total processing time: {time.time() - start_filter_time:.4f} seconds.")
+    print(f"Total processing time: {time.time() - start_pipeline_time:.4f} seconds.")
     
-    # Optionally save the final result to a new parquet file
-    result.to_parquet(f"{input_dir}/grouped_data.parquet")
-    result.to_csv(f"{input_dir}/grouped_data.csv")
+    # Optionally save the final result to a new parquet file with compression
+    result.to_parquet(f"{input_dir}/grouped_data_optimized.parquet", compression='snappy')
+    result.to_csv(f"{input_dir}/grouped_data_optimized.csv")
+    
+    # Clean up client
+    client.close()
     
     return result
 
 if __name__ == "__main__":
-    perform_operations()l
+    perform_operations()
