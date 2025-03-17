@@ -89,10 +89,19 @@ def perform_operations(input_dir="bank_data_joins"):
     start_groupby_time = time.time()
     before_groupby_memory = get_memory_usage()
     
-    # Define a groupby operation in the lazy chain
-    # Split aggregations to avoid nunique issues
-    print("Performing standard aggregations...")
-    basic_grouped_df = merged_df.groupby(['category', 'high_value_transaction']).agg({
+    # Define a groupby operation in the lazy chain with optimizations
+    print("Performing optimized standard aggregations...")
+    
+    # 1. Repartition to optimize for groupby
+    print("Repartitioning data for better groupby performance...")
+    partitions = min(merged_df.npartitions, 32)  # Limit number of partitions
+    merged_df = merged_df.repartition(npartitions=partitions)
+    
+    # 2. Set reasonably sized partitions for the groupby
+    basic_grouped_df = merged_df.groupby(
+        ['category', 'high_value_transaction'],
+        sort=False,  # Turn off sorting for better performance
+    ).agg({
         'amount': 'sum',
         'transaction_id': 'count',
         'balance': 'mean'
@@ -101,20 +110,31 @@ def perform_operations(input_dir="bank_data_joins"):
     # Execute the lazy chain for basic aggregations
     print("\nCollecting basic aggregation results...")
     collection_start_time = time.time()
-    basic_result = basic_grouped_df.compute()
     
-    # Now handle unique counts separately (after computation)
-    print("Computing unique counts...")
-    # Get unique counts by group using pandas methods on the computed result
-    unique_accounts = merged_df.groupby(['category', 'high_value_transaction'])['account_id'].apply(
-        lambda x: x.drop_duplicates().count(), meta=('account_id', 'int64')
-    ).compute()
+    # 3. Optimize computation with more workers if available
+    from distributed import Client
+    try:
+        # Try to use existing client or create a temporary one
+        client = Client.current() or Client(processes=False, threads_per_worker=4)
+        print(f"Using dask client with {len(client.scheduler_info()['workers'])} workers")
+        basic_result = basic_grouped_df.compute()
+    except:
+        # Fall back to regular compute if distributed setup fails
+        print("Using regular compute (no distributed client)")
+        basic_result = basic_grouped_df.compute()
     
-    unique_merchants = merged_df.groupby(['category', 'high_value_transaction'])['merchant_id'].apply(
-        lambda x: x.drop_duplicates().count(), meta=('merchant_id', 'int64')
-    ).compute()
+    # Now handle unique counts separately with optimizations
+    print("Computing unique counts with optimizations...")
     
-    # Convert to pandas Series with MultiIndex
+    # Pre-compute drop_duplicates for better performance
+    unique_account_df = merged_df[['category', 'high_value_transaction', 'account_id']].drop_duplicates()
+    unique_merchant_df = merged_df[['category', 'high_value_transaction', 'merchant_id']].drop_duplicates()
+    
+    # Count unique values after deduplication
+    unique_accounts = unique_account_df.groupby(['category', 'high_value_transaction']).size().compute()
+    unique_merchants = unique_merchant_df.groupby(['category', 'high_value_transaction']).size().compute()
+    
+    # Convert to DataFrames with proper column names
     unique_accounts = unique_accounts.to_frame('unique_accounts')
     unique_merchants = unique_merchants.to_frame('unique_merchants')
     
@@ -167,4 +187,4 @@ def perform_operations(input_dir="bank_data_joins"):
     return result
 
 if __name__ == "__main__":
-    perform_operations()
+    perform_operations()l
