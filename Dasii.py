@@ -182,13 +182,14 @@ def perform_operations(input_dir="bank_data_joins"):
         
         return result
     
-    # Process each partition
+    # Process each partition using Dask's built-in partitioning
     print("Processing data in chunks with Numba acceleration...")
-    for i in range(min(transactions_df.npartitions, 10)):  # Limit to 10 partitions for memory management
-        # Get partition
-        chunk_result = process_chunk(
-            transactions_df.get_partition(i)
-        )
+    # Create delayed tasks for each partition
+    for i, partition in enumerate(transactions_df.to_delayed()):
+        if i >= 10:  # Limit to 10 partitions for memory management
+            break
+        # Process this partition
+        chunk_result = process_chunk(partition)
         chunk_results.append(chunk_result)
     
     # Combine results
