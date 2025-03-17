@@ -90,13 +90,20 @@ def perform_operations(input_dir="bank_data_joins"):
     before_groupby_memory = get_memory_usage()
     
     # Define a groupby operation in the lazy chain
-    # Use 'nunique' properly with Dask
+    # Create custom 'nunique' aggregation for Dask
+    from dask.dataframe.core import Scalar
+    
+    def count_unique(series):
+        # Return number of unique items
+        return series.nunique()
+    
+    # Define explicit aggregations
     grouped_df = merged_df.groupby(['category', 'high_value_transaction']).agg({
         'amount': 'sum',
         'transaction_id': 'count',
         'balance': 'mean',
-        'account_id': 'nunique',  # Dask supports nunique directly
-        'merchant_id': 'nunique'
+        'account_id': count_unique,  # Custom function instead of 'nunique'
+        'merchant_id': count_unique   # Custom function instead of 'nunique'
     }).reset_index()  # Reset index to make it a flat DataFrame for easier display
     
     # Execute the lazy chain and materialize the results
