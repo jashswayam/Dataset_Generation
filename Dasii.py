@@ -91,8 +91,6 @@ def perform_operations(input_dir="bank_data_joins"):
     
     # Define a groupby operation in the lazy chain
     # Create custom 'nunique' aggregation for Dask
-    from dask.dataframe.core import Scalar
-    
     def count_unique(series):
         # Return number of unique items
         return series.nunique()
