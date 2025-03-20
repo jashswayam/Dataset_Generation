@@ -60,15 +60,17 @@ class ColumnComparator:
         return ~ColumnComparator._expr(column).is_in(values)
 
     @staticmethod
-    def _expr(column: Union[str, pl.Expr, Any]) -> pl.Expr:
-        """Helper function to convert column names or values to a Polars expression."""
-        if isinstance(column, str):
+     def _expr(column: Union[str, pl.Series, pd.Series, pl.Expr, Any]) -> pl.Expr:
+        if isinstance(column, str):  # Column name
             return pl.col(column)
-        elif isinstance(column, pl.Expr):
+        elif isinstance(column, pl.Series):  # Polars Series
+            return column.to_frame().to_expr()[0]  # Convert to an expression
+        elif isinstance(column, pd.Series):  # Pandas Series
+            return pl.Series(column).to_frame().to_expr()[0]
+        elif isinstance(column, pl.Expr):  # Already an expression
             return column
-        else:
+        else:  # Convert other types to literals
             return pl.lit(column)
-
 
 # Example usage
 def example():
