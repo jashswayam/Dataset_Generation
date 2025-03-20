@@ -5,331 +5,304 @@ import polars as pl
 
 class ColumnComparator:
     """
-    A class that implements various comparison operations for Polars DataFrame columns
-    using static methods only, no object instantiation required.
+    Extension methods for Polars DataFrame to simplify column comparisons.
+    This class adds methods to the DataFrame class to compare columns with values or other columns.
     """
     
     @staticmethod
-    def _get_expr(column: Union[pl.Series, str]) -> pl.Expr:
+    def _install_methods():
         """
-        Convert column to a Polars expression.
+        Install the comparison methods on the pl.DataFrame class.
+        """
+        def _make_method(method_name, doc_string):
+            def method(df, column1, column2, mode="any"):
+                return df.filter(getattr(ColumnComparator, method_name)(column1, column2, mode=mode))
+            
+            method.__doc__ = doc_string
+            return method
+        
+        # Add each method to the DataFrame class
+        for name, doc in [
+            ("gt", "Filter rows where column1 > column2"),
+            ("lt", "Filter rows where column1 < column2"),
+            ("gte", "Filter rows where column1 >= column2"),
+            ("lte", "Filter rows where column1 <= column2"),
+            ("eq", "Filter rows where column1 == column2"),
+            ("ne", "Filter rows where column1 != column2"),
+            ("contains", "Filter rows where column1 contains column2 (for string columns)"),
+            ("not_contains", "Filter rows where column1 does not contain column2 (for string columns)"),
+            ("is_in", "Filter rows where column1 is in column2 (where column2 is a sequence)"),
+            ("not_in", "Filter rows where column1 is not in column2 (where column2 is a sequence)"),
+        ]:
+            setattr(pl.DataFrame, name, _make_method(name, doc))
+
+    @staticmethod
+    def _get_expr(column: Union[pl.Series, str, pl.Expr], df: Optional[pl.DataFrame] = None) -> pl.Expr:
+        """
+        Convert a column identifier to a Polars expression.
         
         Args:
-            column: Column as string name or Polars Series
+            column: Column as string name, Polars Series, or Polars Expression
+            df: Optional DataFrame to use for context
             
         Returns:
             Polars expression
         """
-        if isinstance(column, str):
+        if isinstance(column, pl.Expr):
+            return column
+        elif isinstance(column, str):
             return pl.col(column)
-        return column
-    
+        elif isinstance(column, pl.Series):
+            return pl.lit(column)
+        else:
+            return pl.lit(column)
+
     @staticmethod
-    def _process_expressions(expressions: List[pl.Expr], mode: str = "any") -> pl.Expr:
+    def _compare_columns(
+        column1: Union[str, pl.Series, pl.Expr, Any],
+        column2: Union[str, pl.Series, pl.Expr, Sequence[Any], Any],
+        operation: str,
+        mode: str = "any"
+    ) -> pl.Expr:
         """
-        Process multiple expressions with the given mode.
+        Compare two columns using the specified operation.
         
         Args:
-            expressions: List of expressions to combine
-            mode: 'any' or 'all' (default: 'any')
+            column1: First column to compare (string name, Polars Series, or Expression)
+            column2: Second column or value to compare against
+            operation: Operation to perform ("gt", "lt", "eq", etc.)
+            mode: For multiple columns, 'any' or 'all' (default: 'any')
             
         Returns:
-            Combined Polars expression
+            Polars expression
         """
+        # Convert column1 to a list if it's not already
+        if not isinstance(column1, list):
+            column1 = [column1]
+        
+        # Map operations to their corresponding expression methods
+        op_map = {
+            "gt": lambda x, y: x > y,
+            "lt": lambda x, y: x < y,
+            "gte": lambda x, y: x >= y,
+            "lte": lambda x, y: x <= y,
+            "eq": lambda x, y: x == y,
+            "ne": lambda x, y: x != y,
+            "contains": lambda x, y: x.str.contains(y) if isinstance(y, str) else x.str.contains(str(y)),
+            "not_contains": lambda x, y: ~x.str.contains(y) if isinstance(y, str) else ~x.str.contains(str(y)),
+            "is_in": lambda x, y: x.is_in(y) if isinstance(y, (list, tuple, set)) else x == y,
+            "not_in": lambda x, y: ~x.is_in(y) if isinstance(y, (list, tuple, set)) else x != y,
+        }
+        
+        # Apply the operation to each column
+        expressions = []
+        for col in column1:
+            col_expr = ColumnComparator._get_expr(col)
+            
+            # If column2 is a string, Series, or Expression, use it as-is
+            if isinstance(column2, (str, pl.Series, pl.Expr)):
+                col2_expr = ColumnComparator._get_expr(column2)
+                expressions.append(op_map[operation](col_expr, col2_expr))
+            else:
+                # Otherwise, use it as a literal value
+                expressions.append(op_map[operation](col_expr, column2))
+        
+        # Combine expressions based on mode
         if len(expressions) == 1:
             return expressions[0]
         
         if mode.lower() == "all":
             return pl.all_horizontal(expressions)
         return pl.any_horizontal(expressions)
-    
+
+    # Comparison methods
     @staticmethod
-    def greater_than_equal_to(
-        columns: Union[str, pl.Series, List[Union[str, pl.Series]]],
-        other: Any,
-        mode: str = "any"
-    ) -> pl.Expr:
+    def gt(column1, column2, mode="any"):
         """
-        Check if column(s) is/are greater than or equal to another value.
+        Check if column1 is greater than column2.
         
         Args:
-            columns: Column name(s) or Polars Series
-            other: Value to compare against
+            column1: First column(s) to compare (string name, Polars Series, or Expression)
+            column2: Second column or value to compare against
             mode: For multiple columns, 'any' or 'all' (default: 'any')
             
         Returns:
             Polars expression
         """
-        if not isinstance(columns, list):
-            columns = [columns]
-            
-        expressions = [ColumnComparator._get_expr(col) >= other for col in columns]
-        return ColumnComparator._process_expressions(expressions, mode)
+        return ColumnComparator._compare_columns(column1, column2, "gt", mode)
     
     @staticmethod
-    def greater_than(
-        columns: Union[str, pl.Series, List[Union[str, pl.Series]]],
-        other: Any,
-        mode: str = "any"
-    ) -> pl.Expr:
+    def lt(column1, column2, mode="any"):
         """
-        Check if column(s) is/are greater than another value.
+        Check if column1 is less than column2.
         
         Args:
-            columns: Column name(s) or Polars Series
-            other: Value to compare against
+            column1: First column(s) to compare (string name, Polars Series, or Expression)
+            column2: Second column or value to compare against
             mode: For multiple columns, 'any' or 'all' (default: 'any')
             
         Returns:
             Polars expression
         """
-        if not isinstance(columns, list):
-            columns = [columns]
-            
-        expressions = [ColumnComparator._get_expr(col) > other for col in columns]
-        return ColumnComparator._process_expressions(expressions, mode)
+        return ColumnComparator._compare_columns(column1, column2, "lt", mode)
     
     @staticmethod
-    def less_than_equal_to(
-        columns: Union[str, pl.Series, List[Union[str, pl.Series]]],
-        other: Any,
-        mode: str = "any"
-    ) -> pl.Expr:
+    def gte(column1, column2, mode="any"):
         """
-        Check if column(s) is/are less than or equal to another value.
+        Check if column1 is greater than or equal to column2.
         
         Args:
-            columns: Column name(s) or Polars Series
-            other: Value to compare against
+            column1: First column(s) to compare (string name, Polars Series, or Expression)
+            column2: Second column or value to compare against
             mode: For multiple columns, 'any' or 'all' (default: 'any')
             
         Returns:
             Polars expression
         """
-        if not isinstance(columns, list):
-            columns = [columns]
-            
-        expressions = [ColumnComparator._get_expr(col) <= other for col in columns]
-        return ColumnComparator._process_expressions(expressions, mode)
+        return ColumnComparator._compare_columns(column1, column2, "gte", mode)
     
     @staticmethod
-    def less_than(
-        columns: Union[str, pl.Series, List[Union[str, pl.Series]]],
-        other: Any,
-        mode: str = "any"
-    ) -> pl.Expr:
+    def lte(column1, column2, mode="any"):
         """
-        Check if column(s) is/are less than another value.
+        Check if column1 is less than or equal to column2.
         
         Args:
-            columns: Column name(s) or Polars Series
-            other: Value to compare against
+            column1: First column(s) to compare (string name, Polars Series, or Expression)
+            column2: Second column or value to compare against
             mode: For multiple columns, 'any' or 'all' (default: 'any')
             
         Returns:
             Polars expression
         """
-        if not isinstance(columns, list):
-            columns = [columns]
-            
-        expressions = [ColumnComparator._get_expr(col) < other for col in columns]
-        return ColumnComparator._process_expressions(expressions, mode)
+        return ColumnComparator._compare_columns(column1, column2, "lte", mode)
     
     @staticmethod
-    def equals(
-        columns: Union[str, pl.Series, List[Union[str, pl.Series]]],
-        other: Any,
-        mode: str = "any"
-    ) -> pl.Expr:
+    def eq(column1, column2, mode="any"):
         """
-        Check if column(s) is/are equal to another value.
+        Check if column1 is equal to column2.
         
         Args:
-            columns: Column name(s) or Polars Series
-            other: Value to compare against
+            column1: First column(s) to compare (string name, Polars Series, or Expression)
+            column2: Second column or value to compare against
             mode: For multiple columns, 'any' or 'all' (default: 'any')
             
         Returns:
             Polars expression
         """
-        if not isinstance(columns, list):
-            columns = [columns]
-            
-        expressions = [ColumnComparator._get_expr(col) == other for col in columns]
-        return ColumnComparator._process_expressions(expressions, mode)
+        return ColumnComparator._compare_columns(column1, column2, "eq", mode)
     
     @staticmethod
-    def not_equals(
-        columns: Union[str, pl.Series, List[Union[str, pl.Series]]],
-        other: Any,
-        mode: str = "any"
-    ) -> pl.Expr:
+    def ne(column1, column2, mode="any"):
         """
-        Check if column(s) is/are not equal to another value.
+        Check if column1 is not equal to column2.
         
         Args:
-            columns: Column name(s) or Polars Series
-            other: Value to compare against
+            column1: First column(s) to compare (string name, Polars Series, or Expression)
+            column2: Second column or value to compare against
             mode: For multiple columns, 'any' or 'all' (default: 'any')
             
         Returns:
             Polars expression
         """
-        if not isinstance(columns, list):
-            columns = [columns]
-            
-        expressions = [ColumnComparator._get_expr(col) != other for col in columns]
-        return ColumnComparator._process_expressions(expressions, mode)
+        return ColumnComparator._compare_columns(column1, column2, "ne", mode)
     
     @staticmethod
-    def contains(
-        columns: Union[str, pl.Series, List[Union[str, pl.Series]]],
-        pattern: str,
-        mode: str = "any"
-    ) -> pl.Expr:
+    def contains(column1, pattern, mode="any"):
         """
         Check if string column(s) contain(s) a specific pattern.
         
         Args:
-            columns: Column name(s) or Polars Series (must be string columns)
+            column1: Column(s) to check (string name, Polars Series, or Expression)
             pattern: Pattern to search for
             mode: For multiple columns, 'any' or 'all' (default: 'any')
             
         Returns:
             Polars expression
         """
-        if not isinstance(columns, list):
-            columns = [columns]
-            
-        expressions = [ColumnComparator._get_expr(col).str.contains(pattern) for col in columns]
-        return ColumnComparator._process_expressions(expressions, mode)
+        return ColumnComparator._compare_columns(column1, pattern, "contains", mode)
     
     @staticmethod
-    def not_contains(
-        columns: Union[str, pl.Series, List[Union[str, pl.Series]]],
-        pattern: str,
-        mode: str = "any"
-    ) -> pl.Expr:
+    def not_contains(column1, pattern, mode="any"):
         """
         Check if string column(s) do(es) not contain a specific pattern.
         
         Args:
-            columns: Column name(s) or Polars Series (must be string columns)
+            column1: Column(s) to check (string name, Polars Series, or Expression)
             pattern: Pattern to search for
             mode: For multiple columns, 'any' or 'all' (default: 'any')
             
         Returns:
             Polars expression
         """
-        if not isinstance(columns, list):
-            columns = [columns]
-            
-        expressions = [~ColumnComparator._get_expr(col).str.contains(pattern) for col in columns]
-        return ColumnComparator._process_expressions(expressions, mode)
+        return ColumnComparator._compare_columns(column1, pattern, "not_contains", mode)
     
     @staticmethod
-    def is_in(
-        columns: Union[str, pl.Series, List[Union[str, pl.Series]]],
-        values: Sequence[Any],
-        mode: str = "any"
-    ) -> pl.Expr:
+    def is_in(column1, values, mode="any"):
         """
-        Check if column(s) value(s) are in a sequence of values.
+        Check if column1 value(s) are in a sequence of values.
         
         Args:
-            columns: Column name(s) or Polars Series
+            column1: Column(s) to check (string name, Polars Series, or Expression)
             values: Sequence of values to check against
             mode: For multiple columns, 'any' or 'all' (default: 'any')
             
         Returns:
             Polars expression
         """
-        if not isinstance(columns, list):
-            columns = [columns]
-            
-        expressions = [ColumnComparator._get_expr(col).is_in(values) for col in columns]
-        return ColumnComparator._process_expressions(expressions, mode)
+        return ColumnComparator._compare_columns(column1, values, "is_in", mode)
     
     @staticmethod
-    def not_in(
-        columns: Union[str, pl.Series, List[Union[str, pl.Series]]],
-        values: Sequence[Any],
-        mode: str = "any"
-    ) -> pl.Expr:
+    def not_in(column1, values, mode="any"):
         """
-        Check if column(s) value(s) are not in a sequence of values.
+        Check if column1 value(s) are not in a sequence of values.
         
         Args:
-            columns: Column name(s) or Polars Series
+            column1: Column(s) to check (string name, Polars Series, or Expression)
             values: Sequence of values to check against
             mode: For multiple columns, 'any' or 'all' (default: 'any')
             
         Returns:
             Polars expression
         """
-        if not isinstance(columns, list):
-            columns = [columns]
-            
-        expressions = [~ColumnComparator._get_expr(col).is_in(values) for col in columns]
-        return ColumnComparator._process_expressions(expressions, mode)
-    
-    # Aliases for better readability
+        return ColumnComparator._compare_columns(column1, values, "not_in", mode)
+
+    # Longer aliases for better readability
     @staticmethod
-    def gte(
-        columns: Union[str, pl.Series, List[Union[str, pl.Series]]],
-        other: Any,
-        mode: str = "any"
-    ) -> pl.Expr:
-        """Alias for greater_than_equal_to"""
-        return ColumnComparator.greater_than_equal_to(columns, other, mode)
+    def greater_than(column1, column2, mode="any"):
+        """Alias for gt"""
+        return ColumnComparator.gt(column1, column2, mode)
     
     @staticmethod
-    def gt(
-        columns: Union[str, pl.Series, List[Union[str, pl.Series]]],
-        other: Any,
-        mode: str = "any"
-    ) -> pl.Expr:
-        """Alias for greater_than"""
-        return ColumnComparator.greater_than(columns, other, mode)
+    def less_than(column1, column2, mode="any"):
+        """Alias for lt"""
+        return ColumnComparator.lt(column1, column2, mode)
     
     @staticmethod
-    def lte(
-        columns: Union[str, pl.Series, List[Union[str, pl.Series]]],
-        other: Any,
-        mode: str = "any"
-    ) -> pl.Expr:
-        """Alias for less_than_equal_to"""
-        return ColumnComparator.less_than_equal_to(columns, other, mode)
+    def greater_than_equal_to(column1, column2, mode="any"):
+        """Alias for gte"""
+        return ColumnComparator.gte(column1, column2, mode)
     
     @staticmethod
-    def lt(
-        columns: Union[str, pl.Series, List[Union[str, pl.Series]]],
-        other: Any,
-        mode: str = "any"
-    ) -> pl.Expr:
-        """Alias for less_than"""
-        return ColumnComparator.less_than(columns, other, mode)
+    def less_than_equal_to(column1, column2, mode="any"):
+        """Alias for lte"""
+        return ColumnComparator.lte(column1, column2, mode)
     
     @staticmethod
-    def eq(
-        columns: Union[str, pl.Series, List[Union[str, pl.Series]]],
-        other: Any,
-        mode: str = "any"
-    ) -> pl.Expr:
-        """Alias for equals"""
-        return ColumnComparator.equals(columns, other, mode)
+    def equals(column1, column2, mode="any"):
+        """Alias for eq"""
+        return ColumnComparator.eq(column1, column2, mode)
     
     @staticmethod
-    def ne(
-        columns: Union[str, pl.Series, List[Union[str, pl.Series]]],
-        other: Any,
-        mode: str = "any"
-    ) -> pl.Expr:
-        """Alias for not_equals"""
-        return ColumnComparator.not_equals(columns, other, mode)
+    def not_equals(column1, column2, mode="any"):
+        """Alias for ne"""
+        return ColumnComparator.ne(column1, column2, mode)
 
 
-# Example usage with the static methods
+# Install the methods to the DataFrame class
+ColumnComparator._install_methods()
+
+
+# Example usage
 def example():
     # Create a sample DataFrame
     df = pl.DataFrame({
@@ -337,90 +310,47 @@ def example():
         "B": [10, 20, 30, 40, 50],
         "C": ["apple", "banana", "cherry", "date", "elderberry"]
     })
-    
-    # Example 1: Filter rows where column A > 3
-    filtered_df = df.filter(ColumnComparator.greater_than("A", 3))
+
+    # Example 1: Using the new syntax to filter rows where A > 3
+    filtered_df = df.gt("A", 3)
     print("Rows where A > 3:")
     print(filtered_df)
-    
-    # Example 2: Filter rows where column B is in [20, 40]
-    filtered_df = df.filter(ColumnComparator.is_in("B", [20, 40]))
-    print("\nRows where B is in [20, 40]:")
+
+    # Example 2: Filter rows where A > B (column to column comparison)
+    filtered_df = df.gt("A", "B")
+    print("\nRows where A > B:")
     print(filtered_df)
-    
-    # Example 3: Filter rows where column C contains "a"
-    filtered_df = df.filter(ColumnComparator.contains("C", "a"))
+
+    # Example 3: Filter rows where C contains 'a'
+    filtered_df = df.contains("C", "a")
     print("\nRows where C contains 'a':")
     print(filtered_df)
-    
+
     # Example 4: Filter rows where either A > 3 or B > 30
-    filtered_df = df.filter(ColumnComparator.greater_than(["A", "B"], 3))  # default mode is "any"
-    print("\nRows where either A > 3 or B > 3:")
-    print(filtered_df)
-    
-    # Example 5: Filter rows where all numeric columns are less than 50
-    filtered_df = df.filter(ColumnComparator.less_than(["A", "B"], 50, mode="all"))
-    print("\nRows where all numeric columns are < 50:")
-    print(filtered_df)
-    
-    # Example 6: Using shorter aliases and combining expressions
-    filtered_df = df.filter(
-        ColumnComparator.gt(["A", "B"], 3) & ColumnComparator.lt(["A", "B"], 40, mode="all")
-    )
-    print("\nRows where (A > 3 OR B > 3) AND (A < 40 AND B < 40):")
+    filtered_df = df.gt(["A", "B"], [3, 30])  # default mode is "any"
+    print("\nRows where either A > 3 or B > 30:")
     print(filtered_df)
 
+    # Example 5: Filter rows where B is in [20, 40]
+    filtered_df = df.is_in("B", [20, 40])
+    print("\nRows where B is in [20, 40]:")
+    print(filtered_df)
 
-def example_with_parquet():
-    # Read the parquet file
-    df = pl.read_parquet("grouped_data.parquet")
-    
-    # Display basic information about the DataFrame
-    print("DataFrame schema:")
-    print(df.schema)
-    print("\nFirst 5 rows:")
-    print(df.head(5))
-    
-    # Example 1: Basic filtering on a single column
-    # Let's assume the parquet file has columns like 'group', 'value', 'category'
-    filtered_df = df.filter(ColumnComparator.gt("value", 100))
-    print("\nRows where value > 100:")
-    print(filtered_df.head(5))
-    
-    # Example 2: Filtering with multiple conditions
-    filtered_df = df.filter(
-        ColumnComparator.is_in("group", ["A", "B"]) & ColumnComparator.gt("value", 50)
-    )
-    print("\nRows where group is either 'A' or 'B' AND value > 50:")
-    print(filtered_df.head(5))
-    
-    # Example 3: Using the multi-column approach
-    filtered_df = df.filter(ColumnComparator.gt(["value1", "value2"], 75, mode="any"))
-    print("\nRows where either value1 > 75 OR value2 > 75:")
-    print(filtered_df.head(5))
-    
-    # Example 4: Combining different comparators
-    filtered_df = df.filter(
-        ColumnComparator.gt("value", 50) & ColumnComparator.contains("category", "important")
-    )
-    print("\nRows where value > 50 AND category contains 'important':")
-    print(filtered_df.head(5))
-    
-    # Example 5: Advanced filtering with aggregation
-    # Get groups where the average value exceeds 100
-    high_avg_groups = df.group_by("group").agg(pl.col("value").mean().alias("avg_value")).filter(
-        ColumnComparator.gt("avg_value", 100)
-    ).select("group")
-    
-    # Then filter the original DataFrame to only include those groups
-    filtered_df = df.filter(
-        ColumnComparator.is_in("group", high_avg_groups["group"])
-    )
-    print("\nRows belonging to groups with average value > 100:")
-    print(filtered_df.head(5))
+    # Example 6: Complex filtering with chaining
+    filtered_df = df.gt("A", 2).lt("B", 40)
+    print("\nRows where A > 2 AND B < 40:")
+    print(filtered_df)
+
+    # Example 7: Comparing a column with another column
+    filtered_df = df.filter(ColumnComparator.gt("A", df["B"] / 10))
+    print("\nRows where A > B/10:")
+    print(filtered_df)
+
+    # Example 8: Using expressions
+    filtered_df = df.filter(ColumnComparator.gt(pl.col("A") + 1, "B" / 10))
+    print("\nRows where (A + 1) > (B/10):")
+    print(filtered_df)
 
 
 if __name__ == "__main__":
     example()
-    # Uncomment to run the parquet example
-    # example_with_parquet()
