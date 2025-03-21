@@ -104,7 +104,50 @@ class ColumnComparator:
     def not_in(column: Union[pl.Series, pl.Expr, pd.Series], values: Sequence[Any]) -> Union[pl.Series, pl.Expr, pd.Series]:
         """Return a truth series checking if column values are NOT in a given sequence."""
         ColumnComparator._validate_first_arg_is_valid(column)
+
+    
+        def list_in(column1: Union[pl.Series, pl.Expr, pd.Series], 
+           column2: Union[pl.Series, pl.Expr, pd.Series, str]) -> Union[pl.Series, pl.Expr, pd.Series]:
+    """
+    Checks if all elements in column2 are contained in column1.
+    Both columns contain comma-separated strings like "A,B,C,D".
+    
+    If column2 is a single string, it will be compared against all rows in column1.
+    Returns a boolean series where True indicates column2 is contained in column1.
+    """
+    ColumnComparator._validate_first_arg_is_valid(column1)
+    
+    # Handle scalar case (string comparison against whole series)
+    if isinstance(column2, str):
+        # If using Polars
+        if isinstance(column1, (pl.Series, pl.Expr)):
+            return column1.apply(lambda x: all(item.strip() in [i.strip() for i in x.split(',')] 
+                                              for item in column2.split(',')))
+        # If using Pandas
+        elif isinstance(column1, pd.Series):
+            return column1.apply(lambda x: all(item.strip() in [i.strip() for i in x.split(',')]
+                                              for item in column2.split(',')))
+    
+    # Handle series to series comparison (must be same length)
+    else:
+        ColumnComparator._validate_compatible_types(column1, column2)
         
+        # If using Polars
+        if isinstance(column1, (pl.Series, pl.Expr)):
+            return pl.Series([
+                all(item.strip() in [i.strip() for i in col1.split(',')]
+                    for item in col2.split(','))
+                for col1, col2 in zip(column1, column2)
+            ])
+        # If using Pandas
+        elif isinstance(column1, pd.Series):
+            return pd.Series([
+                all(item.strip() in [i.strip() for i in col1.split(',')]
+                    for item in col2.split(','))
+                for col1, col2 in zip(column1, column2)
+            ])
+    
+    raise TypeError("Unsupported types for list_in comparison")
         if isinstance(column, pl.Series):
             return ~column.is_in(values)
         elif isinstance(column, pl.Expr):
