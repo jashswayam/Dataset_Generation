@@ -11,77 +11,77 @@ class ColumnComparator:
     """
 
     @staticmethod
-    def gt(column1: Union[str, pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
+    def gt(column1: Union[pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
         """Return an expression for column1 > column2."""
-        ColumnComparator._validate_first_arg_is_column(column1)
+        ColumnComparator._validate_first_arg_is_series(column1)
         return ColumnComparator._compare_columns(column1, column2, lambda a, b: a > b)
 
     @staticmethod
-    def lt(column1: Union[str, pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
+    def lt(column1: Union[pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
         """Return an expression for column1 < column2."""
-        ColumnComparator._validate_first_arg_is_column(column1)
+        ColumnComparator._validate_first_arg_is_series(column1)
         return ColumnComparator._compare_columns(column1, column2, lambda a, b: a < b)
 
     @staticmethod
-    def gte(column1: Union[str, pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
+    def gte(column1: Union[pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
         """Return an expression for column1 >= column2."""
-        ColumnComparator._validate_first_arg_is_column(column1)
+        ColumnComparator._validate_first_arg_is_series(column1)
         return ColumnComparator._compare_columns(column1, column2, lambda a, b: a >= b)
 
     @staticmethod
-    def lte(column1: Union[str, pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
+    def lte(column1: Union[pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
         """Return an expression for column1 <= column2."""
-        ColumnComparator._validate_first_arg_is_column(column1)
+        ColumnComparator._validate_first_arg_is_series(column1)
         return ColumnComparator._compare_columns(column1, column2, lambda a, b: a <= b)
 
     @staticmethod
-    def eq(column1: Union[str, pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
+    def eq(column1: Union[pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
         """Return an expression for column1 == column2."""
-        ColumnComparator._validate_first_arg_is_column(column1)
+        ColumnComparator._validate_first_arg_is_series(column1)
         return ColumnComparator._compare_columns(column1, column2, lambda a, b: a == b)
 
     @staticmethod
-    def ne(column1: Union[str, pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
+    def ne(column1: Union[pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
         """Return an expression for column1 != column2."""
-        ColumnComparator._validate_first_arg_is_column(column1)
+        ColumnComparator._validate_first_arg_is_series(column1)
         return ColumnComparator._compare_columns(column1, column2, lambda a, b: a != b)
 
     @staticmethod
-    def contains(column: Union[str, pl.Series, pd.Series], pattern: str) -> pl.Expr:
+    def contains(column: Union[pl.Series, pd.Series], pattern: str) -> pl.Expr:
         """Return an expression checking if a column contains a pattern."""
-        ColumnComparator._validate_first_arg_is_column(column)
+        ColumnComparator._validate_first_arg_is_series(column)
         col_expr = ColumnComparator._get_column_expr(column)
         return col_expr.str.contains(pattern)
 
     @staticmethod
-    def not_contains(column: Union[str, pl.Series, pd.Series], pattern: str) -> pl.Expr:
+    def not_contains(column: Union[pl.Series, pd.Series], pattern: str) -> pl.Expr:
         """Return an expression checking if a column does not contain a pattern."""
-        ColumnComparator._validate_first_arg_is_column(column)
+        ColumnComparator._validate_first_arg_is_series(column)
         col_expr = ColumnComparator._get_column_expr(column)
         return ~col_expr.str.contains(pattern)
 
     @staticmethod
-    def is_in(column: Union[str, pl.Series, pd.Series], values: Sequence[Any]) -> pl.Expr:
+    def is_in(column: Union[pl.Series, pd.Series], values: Sequence[Any]) -> pl.Expr:
         """Return an expression checking if column values are in a given sequence."""
-        ColumnComparator._validate_first_arg_is_column(column)
+        ColumnComparator._validate_first_arg_is_series(column)
         col_expr = ColumnComparator._get_column_expr(column)
         return col_expr.is_in(values)
 
     @staticmethod
-    def not_in(column: Union[str, pl.Series, pd.Series], values: Sequence[Any]) -> pl.Expr:
+    def not_in(column: Union[pl.Series, pd.Series], values: Sequence[Any]) -> pl.Expr:
         """Return an expression checking if column values are NOT in a given sequence."""
-        ColumnComparator._validate_first_arg_is_column(column)
+        ColumnComparator._validate_first_arg_is_series(column)
         col_expr = ColumnComparator._get_column_expr(column)
         return ~col_expr.is_in(values)
 
     @staticmethod
-    def _validate_first_arg_is_column(column):
-        """Validate that the first argument is a column reference (not a scalar)."""
-        if ColumnComparator._is_scalar(column):
-            raise ValueError("First argument must be a column Series, not a scalar value")
+    def _validate_first_arg_is_series(column):
+        """Validate that the first argument is specifically a Series (Polars or Pandas)."""
+        if not isinstance(column, (pl.Series, pd.Series)):
+            raise ValueError("First argument must be a Polars Series or Pandas Series")
 
     @staticmethod
-    def _compare_columns(column1: Union[str, pl.Series, pd.Series], 
+    def _compare_columns(column1: Union[pl.Series, pd.Series], 
                          column2: Union[str, pl.Expr, Any], 
                          comparison_func) -> pl.Expr:
         """Helper method to handle different column comparison scenarios."""
@@ -96,7 +96,7 @@ class ColumnComparator:
                 (isinstance(value, str) and value.startswith("'") and value.endswith("'")))
 
     @staticmethod
-    def _get_column_expr(column: Union[str, pl.Series, pd.Series, Any]) -> pl.Expr:
+    def _get_column_expr(column: Union[pl.Series, pd.Series, str, Any]) -> pl.Expr:
         """Convert various input types to Polars expressions."""
         if isinstance(column, str):  # Column name
             return pl.col(column)
@@ -124,22 +124,22 @@ class ColumnComparator:
 # Extend DataFrame classes with filter_by method
 def extend_dataframes():
     """Extend Polars and Pandas DataFrames with filter_by method."""
-    
+
     # For Polars DataFrame
     def polars_filter_by(self, expr):
         return self.filter(expr)
-    
+
     # For Pandas DataFrame
     def pandas_filter_by(self, expr):
         # Convert pandas to polars, apply filter, convert back
         pl_df = pl.from_pandas(self)
         filtered_pl_df = pl_df.filter(expr)
         return filtered_pl_df.to_pandas()
-    
+
     # Add methods to the classes
     if not hasattr(pl.DataFrame, "filter_by"):
         pl.DataFrame.filter_by = polars_filter_by
-    
+
     if not hasattr(pd.DataFrame, "filter_by"):
         pd.DataFrame.filter_by = pandas_filter_by
 
@@ -156,7 +156,7 @@ def example():
         "B": [10, 20, 30, 40, 50],
         "C": ["apple", "banana", "cherry", "date", "elderberry"]
     })
-    
+
     # Example with polars DataFrame
     pldf = pl.DataFrame({
         "A": [1, 2, 3, 4, 5],
@@ -164,21 +164,22 @@ def example():
         "C": ["apple", "banana", "cherry", "date", "elderberry"]
     })
 
-    # Using column name directly with pandas
+    # Using Series objects directly
     print("\nPandas: Rows where A > 3:")
-    filtered_pdf = pdf.filter_by(ColumnComparator.gt("A", 3))
+    filtered_pdf = pdf.filter_by(ColumnComparator.gt(pdf["A"], 3))
     print(filtered_pdf)
-    
-    # Using column name directly with polars
-    print("\nPolars: Rows where A > 3:")
-    filtered_pldf = pldf.filter_by(ColumnComparator.gt("A", "B"))
+
+    # Using Series objects with polars
+    print("\nPolars: Rows where A > B/10:")
+    filtered_pldf = pldf.filter_by(ColumnComparator.gt(pldf["A"], pldf["B"]/10))
     print(filtered_pldf)
-    
-   
-    
-    # These should work fine (column as first argument)
-    print("\nRows where B >= 30:")
-    print(pdf.filter_by(ColumnComparator.gte(40, 30)))
+
+    # This should raise an error (scalar as first argument)
+    try:
+        print("\nThis should fail - scalar as first argument:")
+        pdf.filter_by(ColumnComparator.gte(40, pdf["B"]))
+    except ValueError as e:
+        print(f"Correctly caught error: {e}")
 
 
 if __name__ == "__main__":
