@@ -201,6 +201,33 @@ def get_column(df, column_name: str) -> Union[pl.Series, pl.Expr, pd.Series]:
     else:
         raise ValueError(f"Unsupported DataFrame type: {type(df)}")
 
+def list_in(column1: Union[pl.Series, pl.Expr], column2: Union[pl.Series, pl.Expr, str]) -> pl.Expr:
+        """
+        Checks if all elements in column2 are contained in column1.
+        Both columns contain comma-separated strings like "A,B,C,D".
+
+        If column2 is a single string, it will be compared against all rows in column1.
+        Returns a Boolean expression for use in a LazyFrame.
+        """
+        # Convert column1 and column2 to expressions if they are not already
+        if isinstance(column1, pl.Series):
+            column1 = pl.lit(column1)
+        if isinstance(column2, pl.Series):
+            column2 = pl.lit(column2)
+
+        # Convert strings to list (split by ",")
+        col1_list = column1.str.split(",")
+        
+        if isinstance(column2, str):  
+            # If column2 is a single string, convert it to a list and check for subset
+            col2_list = pl.lit(column2).str.split(",")
+        else:
+            # If column2 is an expression, split its values into lists
+            col2_list = column2.str.split(",")
+
+        # Check if all elements of col2_list are in col1_list
+        return col2_list.list.eval(pl.element().is_in(col1_list)).list.all()
+
 
 # Example usage
 def example():
