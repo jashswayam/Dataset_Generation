@@ -1,185 +1,229 @@
 from __future__ import annotations
-from typing import Union, Any, Sequence
+from typing import Union, Any, Sequence, Optional
 import polars as pl
 import pandas as pd
 
 
 class ColumnComparator:
     """
-    Extension methods for Polars and Pandas DataFrames to generate comparison expressions.
-    These expressions can be used in `.filter()`, `.select()`, `.with_columns()`, etc.
+    Extension methods for Polars and Pandas DataFrames to generate comparison truth series.
+    Returns a Boolean Series of the same type as the input (pl.Series, pl.Expr, or pd.Series).
+    
+    Supports:
+    - Polars DataFrame
+    - Polars LazyFrame (using col expressions)
+    - Pandas DataFrame
     """
 
     @staticmethod
-    def gt(column1: Union[pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
-        """Return an expression for column1 > column2."""
-        ColumnComparator._validate_first_arg_is_series(column1)
-        return ColumnComparator._compare_columns(column1, column2, lambda a, b: a > b)
+    def gt(column1: Union[pl.Series, pl.Expr, pd.Series], column2: Union[pl.Series, pl.Expr, pd.Series, Any]) -> Union[pl.Series, pl.Expr, pd.Series]:
+        """Return a truth series for column1 > column2."""
+        ColumnComparator._validate_first_arg_is_valid(column1)
+        ColumnComparator._validate_compatible_types(column1, column2)
+
+        # For scalar comparison or same-type series comparison
+        return column1 > column2
 
     @staticmethod
-    def lt(column1: Union[pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
-        """Return an expression for column1 < column2."""
-        ColumnComparator._validate_first_arg_is_series(column1)
-        return ColumnComparator._compare_columns(column1, column2, lambda a, b: a < b)
+    def lt(column1: Union[pl.Series, pl.Expr, pd.Series], column2: Union[pl.Series, pl.Expr, pd.Series, Any]) -> Union[pl.Series, pl.Expr, pd.Series]:
+        """Return a truth series for column1 < column2."""
+        ColumnComparator._validate_first_arg_is_valid(column1)
+        ColumnComparator._validate_compatible_types(column1, column2)
+
+        return column1 < column2
 
     @staticmethod
-    def gte(column1: Union[pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
-        """Return an expression for column1 >= column2."""
-        ColumnComparator._validate_first_arg_is_series(column1)
-        return ColumnComparator._compare_columns(column1, column2, lambda a, b: a >= b)
+    def gte(column1: Union[pl.Series, pl.Expr, pd.Series], column2: Union[pl.Series, pl.Expr, pd.Series, Any]) -> Union[pl.Series, pl.Expr, pd.Series]:
+        """Return a truth series for column1 >= column2."""
+        ColumnComparator._validate_first_arg_is_valid(column1)
+        ColumnComparator._validate_compatible_types(column1, column2)
+
+        return column1 >= column2
 
     @staticmethod
-    def lte(column1: Union[pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
-        """Return an expression for column1 <= column2."""
-        ColumnComparator._validate_first_arg_is_series(column1)
-        return ColumnComparator._compare_columns(column1, column2, lambda a, b: a <= b)
+    def lte(column1: Union[pl.Series, pl.Expr, pd.Series], column2: Union[pl.Series, pl.Expr, pd.Series, Any]) -> Union[pl.Series, pl.Expr, pd.Series]:
+        """Return a truth series for column1 <= column2."""
+        ColumnComparator._validate_first_arg_is_valid(column1)
+        ColumnComparator._validate_compatible_types(column1, column2)
+
+        return column1 <= column2
 
     @staticmethod
-    def eq(column1: Union[pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
-        """Return an expression for column1 == column2."""
-        ColumnComparator._validate_first_arg_is_series(column1)
-        return ColumnComparator._compare_columns(column1, column2, lambda a, b: a == b)
+    def eq(column1: Union[pl.Series, pl.Expr, pd.Series], column2: Union[pl.Series, pl.Expr, pd.Series, Any]) -> Union[pl.Series, pl.Expr, pd.Series]:
+        """Return a truth series for column1 == column2."""
+        ColumnComparator._validate_first_arg_is_valid(column1)
+        ColumnComparator._validate_compatible_types(column1, column2)
+
+        return column1 == column2
 
     @staticmethod
-    def ne(column1: Union[pl.Series, pd.Series], column2: Union[str, pl.Expr, Any]) -> pl.Expr:
-        """Return an expression for column1 != column2."""
-        ColumnComparator._validate_first_arg_is_series(column1)
-        return ColumnComparator._compare_columns(column1, column2, lambda a, b: a != b)
+    def ne(column1: Union[pl.Series, pl.Expr, pd.Series], column2: Union[pl.Series, pl.Expr, pd.Series, Any]) -> Union[pl.Series, pl.Expr, pd.Series]:
+        """Return a truth series for column1 != column2."""
+        ColumnComparator._validate_first_arg_is_valid(column1)
+        ColumnComparator._validate_compatible_types(column1, column2)
+
+        return column1 != column2
 
     @staticmethod
-    def contains(column: Union[pl.Series, pd.Series], pattern: str) -> pl.Expr:
-        """Return an expression checking if a column contains a pattern."""
-        ColumnComparator._validate_first_arg_is_series(column)
-        col_expr = ColumnComparator._get_column_expr(column)
-        return col_expr.str.contains(pattern)
+    def contains(column: Union[pl.Series, pl.Expr, pd.Series], pattern: str) -> Union[pl.Series, pl.Expr, pd.Series]:
+        """Return a truth series checking if a column contains a pattern."""
+        ColumnComparator._validate_first_arg_is_valid(column)
+
+        if isinstance(column, pl.Series):
+            return column.str.contains(pattern)
+        elif isinstance(column, pl.Expr):
+            return column.str.contains(pattern)
+        else:  # pandas Series
+            return column.str.contains(pattern)
 
     @staticmethod
-    def not_contains(column: Union[pl.Series, pd.Series], pattern: str) -> pl.Expr:
-        """Return an expression checking if a column does not contain a pattern."""
-        ColumnComparator._validate_first_arg_is_series(column)
-        col_expr = ColumnComparator._get_column_expr(column)
-        return ~col_expr.str.contains(pattern)
+    def not_contains(column: Union[pl.Series, pl.Expr, pd.Series], pattern: str) -> Union[pl.Series, pl.Expr, pd.Series]:
+        """Return a truth series checking if a column does not contain a pattern."""
+        ColumnComparator._validate_first_arg_is_valid(column)
+
+        if isinstance(column, pl.Series):
+            return ~column.str.contains(pattern)
+        elif isinstance(column, pl.Expr):
+            return ~column.str.contains(pattern)
+        else:  # pandas Series
+            return ~column.str.contains(pattern)
 
     @staticmethod
-    def is_in(column: Union[pl.Series, pd.Series], values: Sequence[Any]) -> pl.Expr:
-        """Return an expression checking if column values are in a given sequence."""
-        ColumnComparator._validate_first_arg_is_series(column)
-        col_expr = ColumnComparator._get_column_expr(column)
-        return col_expr.is_in(values)
+    def is_in(column: Union[pl.Series, pl.Expr, pd.Series], values: Sequence[Any]) -> Union[pl.Series, pl.Expr, pd.Series]:
+        """Return a truth series checking if column values are in a given sequence."""
+        ColumnComparator._validate_first_arg_is_valid(column)
+
+        if isinstance(column, pl.Series):
+            return column.is_in(values)
+        elif isinstance(column, pl.Expr):
+            return column.is_in(values)
+        else:  # pandas Series
+            return column.isin(values)
 
     @staticmethod
-    def not_in(column: Union[pl.Series, pd.Series], values: Sequence[Any]) -> pl.Expr:
-        """Return an expression checking if column values are NOT in a given sequence."""
-        ColumnComparator._validate_first_arg_is_series(column)
-        col_expr = ColumnComparator._get_column_expr(column)
-        return ~col_expr.is_in(values)
+    def not_in(column: Union[pl.Series, pl.Expr, pd.Series], values: Sequence[Any]) -> Union[pl.Series, pl.Expr, pd.Series]:
+        """Return a truth series checking if column values are NOT in a given sequence."""
+        ColumnComparator._validate_first_arg_is_valid(column)
+
+        if isinstance(column, pl.Series):
+            return ~column.is_in(values)
+        elif isinstance(column, pl.Expr):
+            return ~column.is_in(values)
+        else:  # pandas Series
+            return ~column.isin(values)
 
     @staticmethod
-    def _validate_first_arg_is_series(column):
-        """Validate that the first argument is specifically a Series (Polars or Pandas)."""
-        if not isinstance(column, (pl.Series, pd.Series)):
-            raise ValueError("First argument must be a Polars Series or Pandas Series")
+    def list_in(column1: Union[pl.Series, pl.Expr, pd.Series], 
+                column2: Union[pl.Series, pl.Expr, pd.Series, str]) -> Union[pl.Series, pl.Expr, pd.Series]:
+        """
+        Checks if all elements in column2 are contained in column1.
+        Both columns contain comma-separated strings like "A,B,C,D".
+        
+        If column2 is a single string, it will be compared against all rows in column1.
+        Returns a boolean series where True indicates all items in column2 are present in column1.
+        """
+        ColumnComparator._validate_first_arg_is_valid(column1)
 
-    @staticmethod
-    def _compare_columns(column1: Union[pl.Series, pd.Series], 
-                         column2: Union[str, pl.Expr, Any], 
-                         comparison_func) -> pl.Expr:
-        """Helper method to handle different column comparison scenarios."""
-        col1_expr = ColumnComparator._get_column_expr(column1)
-        col2_expr = ColumnComparator._get_column_expr(column2)
-        return comparison_func(col1_expr, col2_expr)
+        # Helper function to convert comma-separated string to set
+        def to_set(x):
+            return set(item.strip() for item in x.split(','))
 
-    @staticmethod
-    def _is_scalar(value):
-        """Check if a value is a scalar (not a column reference)."""
-        return (isinstance(value, (int, float, bool)) or 
-                (isinstance(value, str) and value.startswith("'") and value.endswith("'")))
+        # Handle scalar case (string comparison against whole series)
+        if isinstance(column2, str):
+            column2_set = to_set(column2)
 
-    @staticmethod
-    def _get_column_expr(column: Union[pl.Series, pd.Series, str, Any]) -> pl.Expr:
-        """Convert various input types to Polars expressions."""
-        if isinstance(column, str):  # Column name
-            return pl.col(column)
-        elif isinstance(column, pl.Series):  # Polars Series
-            return pl.col(column.name)
-        elif isinstance(column, pd.Series):  # Pandas Series
-            return pl.col(column.name)
-        elif isinstance(column, dict) and len(column) == 1:  # Dict with DataFrame and column name
-            # For cases like {"df": "column_name"}
-            df_key = list(column.keys())[0]
-            col_name = column[df_key]
-            return pl.col(col_name)
-        elif isinstance(column, (int, float, bool)):  # Handle scalar values
-            return pl.lit(column)
-        elif isinstance(column, pl.DataFrame) and len(column.columns) == 1:
-            # Single column DataFrame
-            return pl.col(column.columns[0])
-        elif isinstance(column, pd.DataFrame) and len(column.columns) == 1:
-            # Single column DataFrame
-            return pl.col(column.columns[0])
+            # If using Polars
+            if isinstance(column1, pl.Series):
+                return column1.apply(lambda x: column2_set.issubset(to_set(x)))
+            elif isinstance(column1, pl.Expr):
+                return column1.map_elements(lambda x: column2_set.issubset(to_set(x)))
+            # If using Pandas
+            elif isinstance(column1, pd.Series):
+                return column1.apply(lambda x: column2_set.issubset(to_set(x)))
+
+        # Handle series to series comparison (must be same length)
         else:
-            raise TypeError("Column should be a column name, Polars Series, Pandas Series, or scalar value")
+            ColumnComparator._validate_compatible_types(column1, column2)
+
+            # If using Polars
+            if isinstance(column1, pl.Series) and isinstance(column2, pl.Series):
+                return pl.Series([
+                    to_set(col2).issubset(to_set(col1))
+                    for col1, col2 in zip(column1, column2)
+                ])
+            # For Expr, this would be more complex and would need to be handled differently
+            # If using Pandas
+            elif isinstance(column1, pd.Series) and isinstance(column2, pd.Series):
+                return pd.Series([
+                    to_set(col2).issubset(to_set(col1))
+                    for col1, col2 in zip(column1, column2)
+                ])
+
+        raise TypeError("Unsupported types for list_in comparison")
+
+    @staticmethod
+    def _validate_first_arg_is_valid(column):
+        """Validate that the first argument is a valid column representation (Series or Expression)."""
+        if not isinstance(column, (pl.Series, pl.Expr, pd.Series)):
+            raise ValueError("First argument must be a Polars Series, Polars Expression, or Pandas Series")
+
+    @staticmethod
+    def _validate_compatible_types(column1, column2):
+        """Validate that the columns are compatible types and don't mix polars and pandas."""
+        # Skip validation for scalar second arguments
+        if not isinstance(column2, (pl.Series, pl.Expr, pd.Series)):
+            return
+
+        # Check for incompatible combinations
+        if (isinstance(column1, pd.Series) and isinstance(column2, (pl.Series, pl.Expr))) or \
+           (isinstance(column1, (pl.Series, pl.Expr)) and isinstance(column2, pd.Series)):
+            raise TypeError("Cannot compare Polars and Pandas objects together")
 
 
-# Extend DataFrame classes with filter_by method
-def extend_dataframes():
-    """Extend Polars and Pandas DataFrames with filter_by method."""
-
-    # For Polars DataFrame
-    def polars_filter_by(self, expr):
-        return self.filter(expr)
-
-    # For Pandas DataFrame
-    def pandas_filter_by(self, expr):
-        # Convert pandas to polars, apply filter, convert back
-        pl_df = pl.from_pandas(self)
-        filtered_pl_df = pl_df.filter(expr)
-        return filtered_pl_df.to_pandas()
-
-    # Add methods to the classes
-    if not hasattr(pl.DataFrame, "filter_by"):
-        pl.DataFrame.filter_by = polars_filter_by
-
-    if not hasattr(pd.DataFrame, "filter_by"):
-        pd.DataFrame.filter_by = pandas_filter_by
-
-
-# Call this function to extend DataFrame classes
-extend_dataframes()
+# Helper function to get column from different dataframe types
+def get_column(df, column_name: str) -> Union[pl.Series, pl.Expr, pd.Series]:
+    """
+    Helper function to get a column from different dataframe types.
+    
+    Args:
+        df: DataFrame object (pl.DataFrame, pl.LazyFrame, or pd.DataFrame)
+        column_name: Name of the column to access
+        
+    Returns:
+        Column representation appropriate for the dataframe type
+    """
+    if isinstance(df, pl.LazyFrame):
+        return pl.col(column_name)
+    elif isinstance(df, pl.DataFrame):
+        return df[column_name]
+    elif isinstance(df, pd.DataFrame):
+        return df[column_name]
+    else:
+        raise ValueError(f"Unsupported DataFrame type: {type(df)}")
 
 
 # Example usage
 def example():
-    # Example with pandas DataFrame
-    pdf = pd.DataFrame({
-        "A": [1, 2, 3, 4, 5],
-        "B": [10, 20, 30, 40, 50],
-        "C": ["apple", "banana", "cherry", "date", "elderberry"]
-    })
-
-    # Example with polars DataFrame
-    pldf = pl.DataFrame({
-        "A": [1, 2, 3, 4, 5],
-        "B": [10, 20, 30, 40, 50],
-        "C": ["apple", "banana", "cherry", "date", "elderberry"]
-    })
-
-    # Using Series objects directly
-    print("\nPandas: Rows where A > 3:")
-    filtered_pdf = pdf.filter_by(ColumnComparator.gt(pdf["A"], 3))
+    # Create a Polars LazyFrame
+    pldf = pl.scan_parquet("path/to/file.parquet")
+    
+    # For LazyFrame, use expressions
+    amount_expr = pl.col("amount")
+    truth_series = ColumnComparator.gt(amount_expr, 50)
+    
+    # Apply filter on the LazyFrame
+    filtered_lf = pldf.filter(truth_series)
+    
+    # Now collect the result
+    filtered_df = filtered_lf.collect()
+    print(filtered_df)
+    
+    # Alternative: working with an already collected DataFrame
+    df = pldf.collect()
+    amount_series = df["amount"]
+    truth_series = ColumnComparator.gt(amount_series, 50)
+    filtered_pdf = df.filter(truth_series)
     print(filtered_pdf)
-
-    # Using Series objects with polars
-    print("\nPolars: Rows where A > B/10:")
-    filtered_pldf = pldf.filter_by(ColumnComparator.gt(pldf["A"], pldf["B"]/10))
-    print(filtered_pldf)
-
-    # This should raise an error (scalar as first argument)
-    try:
-        print("\nThis should fail - scalar as first argument:")
-        pdf.filter_by(ColumnComparator.gte(40, pdf["B"]))
-    except ValueError as e:
-        print(f"Correctly caught error: {e}")
 
 
 if __name__ == "__main__":
