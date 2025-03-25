@@ -1,9 +1,18 @@
 from __future__ import annotations
-from typing import Union, Any
+from typing import Union, Any, Callable
 import polars as pl
 import pandas as pd
+import operator
 
 class ColumnComparator:
+    # Comparison operators directly in the class
+    eq = operator.eq
+    ne = operator.ne
+    gt = operator.gt
+    ge = operator.ge
+    lt = operator.lt
+    le = operator.le
+
     @staticmethod
     def _to_set(x: str) -> set[str]:
         """
@@ -19,7 +28,7 @@ class ColumnComparator:
 
     @staticmethod
     def list_in(column1: Union[pl.Series, pl.Expr, pd.Series, pl.LazyFrame], 
-                column2: Union[pl.Series, pl.Expr, pd.Series, str, pl.LazyFrame, pl.col]) -> Union[pl.Series, pl.Expr, pd.Series, pl.LazyFrame]:
+                column2: Union[pl.Series, pl.Expr, pd.Series, str, pl.LazyFrame]) -> pl.Expr:
         """
         Checks if all elements in column2 are contained in column1.
         
@@ -30,79 +39,75 @@ class ColumnComparator:
             column2: Column or string to check for containment
         
         Returns:
-            Boolean series/frame where True indicates all items in column2 are present in column1
+            Polars expression where True indicates all items in column2 are present in column1
         
         Raises:
             TypeError: For unsupported types
         """
-        # Handle Polars LazyFrame cases
-        if isinstance(column1, pl.LazyFrame):
-            # If column2 is a column expression
-            if isinstance(column2, pl.Expr):
-                return column1.with_columns(
-                    pl.col(column1.columns).apply(
-                        lambda x, col2: ColumnComparator._to_set(col2).issubset(ColumnComparator._to_set(x)),
-                        column2
-                    )
-                )
-            
-            # If column2 is a LazyFrame, we need to handle it differently
-            if isinstance(column2, pl.LazyFrame):
-                raise TypeError("Cannot compare two LazyFrames directly")
-            
-            # If column2 is a string, apply to all columns
-            if isinstance(column2, str):
-                column2_set = ColumnComparator._to_set(column2)
-                return column1.with_columns(
-                    pl.all().apply(lambda x: column2_set.issubset(ColumnComparator._to_set(x)))
-                )
-            
-            # If column2 is a Series 
-            return column1.with_columns(
-                column1.select(column2).apply(
-                    lambda x: column2.issubset(ColumnComparator._to_set(x))
-                )
-            )
-
-        # Handle scalar case (string comparison against whole series)
+        # If column2 is a string, create a simple subset check
         if isinstance(column2, str):
             column2_set = ColumnComparator._to_set(column2)
-
-            # If using Polars
-            if isinstance(column1, (pl.Series, pl.Expr)):
-                return column1.apply(lambda x: column2_set.issubset(ColumnComparator._to_set(x)))
-            
-            # If using Pandas
-            elif isinstance(column1, pd.Series):
-                return column1.apply(lambda x: column2_set.issubset(ColumnComparator._to_set(x)))
-
-        # Handle column expression case for Polars
-        elif isinstance(column2, pl.Expr):
-            # Create an expression that checks subset containment
-            return column1.zip_with(column2, 
-                lambda x, y: ColumnComparator._to_set(y).issubset(ColumnComparator._to_set(x))
+            return pl.col(column1).map(
+                lambda x: column2_set.issubset(ColumnComparator._to_set(x))
             )
+        
+        # If column2 is an expression or column name
+        elif isinstance(column2, (pl.Expr, str)):
+            # Convert column name to expression if needed
+            col2_expr = column2 if isinstance(column2, pl.Expr) else pl.col(column2)
+            
+            # Create an expression that checks subset containment
+            return pl.struct([pl.col(column1), col2_expr]).map(
+                lambda x: ColumnComparator._to_set(x[1]).issubset(
+                    ColumnComparator._to_set(x[0])
+                )
+            )
+        
+        # Handle series comparison
+        elif isinstance(column2, (pl.Series, pd.Series)):
+            # Create an expression for subset comparison
+            return pl.col(column1).map_batches(
+                lambda x: [
+                    ColumnComparator._to_set(val2).issubset(ColumnComparator._to_set(val1)) 
+                    for val1, val2 in zip(x, column2)
+                ]
+            )
+        
+        raise TypeError("Unsupported types for list_in comparison")
 
-        # Handle series to series comparison (must be same length)
-        else:
-            # If using Polars
-            if isinstance(column1, (pl.Series, pl.Expr)):
-                return column1.zip_with(column2, 
-                    lambda x, y: ColumnComparator._to_set(y).issubset(ColumnComparator._to_set(x))
+    @classmethod
+    def create_operator(cls, op_func: Callable):
+        """
+        Create a custom operator function for comparisons.
+        
+        Args:
+            op_func: Comparison function to apply
+        
+        Returns:
+            A function that can be used as an operator
+        """
+        def _operator(column1, column2):
+            # If column2 is a simple value or string
+            if isinstance(column2, (str, int, float)):
+                return pl.col(column1).map(lambda x: op_func(x, column2))
+            
+            # If column2 is an expression or column name
+            elif isinstance(column2, (pl.Expr, str)):
+                # Convert column name to expression if needed
+                col2_expr = column2 if isinstance(column2, pl.Expr) else pl.col(column2)
+                
+                # Create an expression that applies the comparison
+                return pl.struct([pl.col(column1), col2_expr]).map(
+                    lambda x: op_func(x[0], x[1])
                 )
             
-            # If using Pandas
-            elif isinstance(column1, pd.Series):
-                return pd.Series([
-                    ColumnComparator._to_set(col2).issubset(ColumnComparator._to_set(col1))
-                    for col1, col2 in zip(column1, column2)
-                ])
-
-        raise TypeError("Unsupported types for list_in comparison")
+            raise TypeError("Unsupported types for operator comparison")
+        
+        return _operator
 
     @staticmethod
     def __call__(column1: Union[pl.Series, pl.Expr, pd.Series, pl.LazyFrame], 
-                 column2: Union[pl.Series, pl.Expr, pd.Series, str, pl.LazyFrame, pl.col]) -> Union[pl.Series, pl.Expr, pd.Series, pl.LazyFrame]:
+                 column2: Union[pl.Series, pl.Expr, pd.Series, str, pl.LazyFrame]) -> pl.Expr:
         """
         Allows using the method as an operator-like function.
         
@@ -111,7 +116,7 @@ class ColumnComparator:
             column2: Column or string to check for containment
         
         Returns:
-            Boolean series where True indicates all items in column2 are present in column1
+            Polars expression for the comparison
         """
         return ColumnComparator.list_in(column1, column2)
 
@@ -119,46 +124,58 @@ class ColumnComparator:
 list_in = ColumnComparator()
 
 # Demonstration function
-def demonstrate_list_in():
+def demonstrate_comparators():
     # Create a sample LazyFrame
     lf = pl.LazyFrame({
         'source_currencies': ['INR,AED,EUR', 'INR,EUR', 'USD,INR,EUR'],
-        'target_currencies': ['AED,INR', 'EUR', 'AED,YEN']
+        'target_currencies': ['AED,INR', 'EUR', 'AED,YEN'],
+        'amount': [100, 200, 300]
     })
     
-    # Case 1: Using pl.col() as second argument
+    # Case 1: List-in comparison
     result1 = lf.filter(
         list_in(pl.col("source_currencies"), pl.col("target_currencies"))
     ).collect()
-    print("Filtered using pl.col():", result1)
+    print("List-in comparison:", result1)
     
-    # Case 2: Complex filtering with pl.col()
-    result2 = lf.with_columns(
-        list_in(pl.col("source_currencies"), pl.col("target_currencies")).alias("is_subset")
+    # Case 2: Greater than comparison using class operator
+    result2 = lf.filter(
+        ColumnComparator.gt(pl.col("amount"), 150)
     ).collect()
-    print("\nAdded check column:", result2)
+    print("\nGreater than 150:", result2)
     
-    # Case 3: Mixing string and column expressions
+    # Case 3: Complex filtering
     result3 = lf.filter(
         (list_in(pl.col("source_currencies"), "INR,AED")) & 
-        (list_in(pl.col("source_currencies"), pl.col("target_currencies")))
+        (ColumnComparator.gt(pl.col("amount"), 100))
     ).collect()
     print("\nComplex filtering:", result3)
+    
+    # Case 4: Equality comparison
+    result4 = lf.filter(
+        ColumnComparator.eq(pl.col("amount"), 200)
+    ).collect()
+    print("\nEqual to 200:", result4)
 
-# Standalone Polars DataFrame example
-def standalone_example():
-    # Create a DataFrame
-    df = pl.DataFrame({
-        'source_currencies': ['INR,AED,EUR', 'INR,EUR', 'USD,INR,EUR'],
-        'target_currencies': ['AED,INR', 'EUR', 'AED,YEN']
+# Example of custom comparison and operators
+def custom_comparison():
+    # Create a custom comparison function
+    def between(column1, lower, upper):
+        return ColumnComparator.create_operator(
+            lambda x, _: lower <= x <= upper
+        )(column1, None)
+    
+    # Create a sample LazyFrame
+    lf = pl.LazyFrame({
+        'amount': [100, 200, 300, 400, 500]
     })
     
-    # Filter using column comparison
-    result = df.filter(
-        list_in(pl.col("source_currencies"), pl.col("target_currencies"))
-    )
-    print("Filtered DataFrame:", result)
+    # Filter amounts between 150 and 350
+    result = lf.filter(
+        between(pl.col("amount"), 150, 350)
+    ).collect()
+    print("Amounts between 150 and 350:", result)
 
 # Uncomment to run demonstrations
-# demonstrate_list_in()
-# standalone_example()
+# demonstrate_comparators()
+# custom_comparison()
