@@ -31,19 +31,23 @@ class ExtendedOperator:
         if isinstance(column2, str):
             column2_set = to_set(column2)
 
-            if isinstance(column1, (pl.Series, pl.Expr)):
+            if isinstance(column1, pl.Expr):
+                return column1.map_elements(lambda x: to_set(x).issubset(column2_set))
+            elif isinstance(column1, pl.Series):
                 return column1.apply(lambda x: to_set(x).issubset(column2_set))
             elif isinstance(column1, pd.Series):
                 return column1.apply(lambda x: to_set(x).issubset(column2_set))
 
         # Series to series comparison
         else:
-            if isinstance(column1, (pl.Series, pl.Expr)):
+            if isinstance(column1, pl.Expr) and isinstance(column2, pl.Expr):
+                return column1.map_elements(lambda x, y: to_set(x).issubset(to_set(y)), return_dtype=pl.Boolean)
+            elif isinstance(column1, pl.Series) and isinstance(column2, pl.Series):
                 return pl.Series([
                     to_set(col1).issubset(to_set(col2))
                     for col1, col2 in zip(column1, column2)
                 ])
-            elif isinstance(column1, pd.Series):
+            elif isinstance(column1, pd.Series) and isinstance(column2, pd.Series):
                 return pd.Series([
                     to_set(col1).issubset(to_set(col2))
                     for col1, col2 in zip(column1, column2)
