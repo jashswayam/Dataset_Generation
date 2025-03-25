@@ -59,11 +59,19 @@ class ExtendedOperator:
 op = ExtendedOperator  # Alias for convenience
 
 # Pandas Example
-s1 = pd.Series(["A,B", "B,C", "A,D"])
-s2 = "A,B,C,D"
-print(op.list_in(s1, s2))  # Checks if each row in s1 is fully in s2
+A = pd.Series(['INR,AED,EUR', 'INR,EUR','USD,INR,EUR'])
+B = pd.Series(['AED,INR', 'EUR', 'AED,YEN'])
+print(op.list_in(A, B))  # Expected output: [True, True, False]
+
+A = pd.Series(['INR,AED,EUR', 'INR,EUR','USD,INR,EUR'])
+B = "INR,AED"
+print(op.list_in(A, B))  # Expected output: [True, True, False]
 
 # Polars Example
-lf = pl.LazyFrame({"col1": ["A,B", "B,C", "A,D"]})
-filtered_lf = lf.filter(op.list_in(pl.col("col1"), "A,B,C,D"))
-print(filtered_lf.collect())  # Filters rows where "A,B,C,D" contains all elements of "col1"
+A = pl.Series("A", ['INR,AED,EUR', 'INR,EUR','USD,INR,EUR'])
+B = pl.Series("B", ['AED,INR', 'EUR', 'AED,YEN'])
+print(op.list_in(A, B))  # Expected output: [True, True, False]
+
+A = pl.LazyFrame({"col1": ['INR,AED,EUR', 'INR,EUR','USD,INR,EUR']})
+filtered_lf = A.filter(op.list_in(pl.col("col1"), "INR,AED"))
+print(filtered_lf.collect())  # Expected output: LazyFrame with rows [True, True, False]
