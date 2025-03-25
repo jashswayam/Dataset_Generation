@@ -33,9 +33,11 @@ class ExtendedOperator:
             return column1.apply(lambda x, y: to_set(x).issubset(to_set(y)), column2)
 
         elif isinstance(column1, pl.Expr) and isinstance(column2, pl.Expr):
-            return column1.map_elements(lambda x, y: to_set(x).issubset(to_set(y)), return_dtype=pl.Boolean)
+            # FIX: Use `zip_with` instead of `map_elements`
+            return column1.zip_with(column2, lambda x, y: to_set(x).issubset(to_set(y)))
 
         raise TypeError("Unsupported types for list_in comparison")
+
 
 # Example Usage
 op = ExtendedOperator()  # Alias for convenience
