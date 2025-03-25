@@ -49,8 +49,11 @@ class ExtendedOperator:
             ])
 
         elif isinstance(column1, pl.Expr) and isinstance(column2, pl.Expr):
-            # ✅ Fix: Use `zip_with` for row-wise operations in LazyFrame
-            return column1.zip_with(column2, lambda x, y: to_set(y).issubset(to_set(x)))
+            # ✅ Corrected: Use `pl.struct()` to process both columns together
+            return pl.struct([column1, column2]).map_elements(
+                lambda row: to_set(row[1]).issubset(to_set(row[0])),
+                return_dtype=pl.Boolean
+            )
 
         raise TypeError("Unsupported types for list_in comparison")
 
