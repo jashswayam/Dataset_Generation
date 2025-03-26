@@ -6,6 +6,10 @@ xml_data = """<Rule>
             <enabled>true</enabled>
             <threshold>0.75</threshold>
             <mode>adaptive</mode>
+            <extraParam>value</extraParam>
+            <nested>
+                <subParam>123</subParam>
+            </nested>
         </DynamicThresholdCalculation>
     </settings>
 </Rule>"""
@@ -14,5 +18,9 @@ xml_data = """<Rule>
 root = ET.fromstring(xml_data)
 dynamic_threshold = root.find(".//DynamicThresholdCalculation")
 
-# Convert to dictionary and print
-print({child.tag: child.text for child in dynamic_threshold} if dynamic_threshold is not None else "Tag not found")
+# Convert to dictionary (handles multiple children)
+def xml_to_dict(element):
+    return {child.tag: xml_to_dict(child) if list(child) else child.text for child in element}
+
+# Print the dictionary
+print(xml_to_dict(dynamic_threshold) if dynamic_threshold is not None else "Tag not found")
