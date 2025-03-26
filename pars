@@ -1,0 +1,18 @@
+import xml.etree.ElementTree as ET
+
+xml_data = """<Rule>
+    <settings>
+        <DynamicThresholdCalculation>
+            <enabled>true</enabled>
+            <threshold>0.75</threshold>
+            <mode>adaptive</mode>
+        </DynamicThresholdCalculation>
+    </settings>
+</Rule>"""
+
+# Parse and extract
+root = ET.fromstring(xml_data)
+dynamic_threshold = root.find(".//DynamicThresholdCalculation")
+
+# Convert to dictionary and print
+print({child.tag: child.text for child in dynamic_threshold} if dynamic_threshold is not None else "Tag not found")
