@@ -1,8 +1,11 @@
 import xml.etree.ElementTree as ET
+from pprint import pprint
 
 xml_data = """<Rule>
     <settings>
         <DynamicThresholdCalculation>
+            <Key>12345</Key>
+            <columns>some_column</columns>
             <enabled>true</enabled>
             <threshold>0.75</threshold>
             <mode>adaptive</mode>
@@ -10,6 +13,9 @@ xml_data = """<Rule>
             <nested>
                 <subParam>123</subParam>
             </nested>
+            <calculations>
+                <formula>x + y</formula>
+            </calculations>
         </DynamicThresholdCalculation>
     </settings>
 </Rule>"""
@@ -18,9 +24,24 @@ xml_data = """<Rule>
 root = ET.fromstring(xml_data)
 dynamic_threshold = root.find(".//DynamicThresholdCalculation")
 
-# Convert to dictionary (handles multiple children)
+# Convert to dictionary (handles nested elements)
 def xml_to_dict(element):
     return {child.tag: xml_to_dict(child) if list(child) else child.text for child in element}
 
-# Print the dictionary
-print(xml_to_dict(dynamic_threshold) if dynamic_threshold is not None else "Tag not found")
+# Validate conditions
+if dynamic_threshold is not None:
+    key = dynamic_threshold.find("Key")
+    columns = dynamic_threshold.find("columns")
+    calculations = dynamic_threshold.findall("calculations")
+
+    if key is None or not key.text.strip():
+        print("❌ Validation Failed: <Key> tag is missing or empty.")
+    elif columns is None:
+        print("❌ Validation Failed: <columns> tag is missing.")
+    elif len(calculations) != 1:
+        print(f"❌ Validation Failed: Expected 1 <calculations> tag, found {len(calculations)}.")
+    else:
+        print("✅ Validation Passed! Extracted Data:")
+        pprint(xml_to_dict(dynamic_threshold))
+else:
+    print("❌ Tag <DynamicThresholdCalculation> not found.")
