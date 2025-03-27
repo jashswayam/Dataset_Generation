@@ -60,7 +60,7 @@ def validate_dynamic_thresholds(xml_data):
 
     # 1. Validate PrimaryKey (account_id should not be null)
     primary_key = dynamic_thresholds.find("PrimaryKey/Key")
-    if primary_key is None or not primary_key.text.strip():
+    if primary_key is None or not primary_key.text or not primary_key.text.strip():
         raise ValueError("PrimaryKey <Key> cannot be null or empty")
 
     # 2. Validate at least one <Calculation> tag
@@ -74,9 +74,9 @@ def validate_dynamic_thresholds(xml_data):
         key = calc.find("Key")
         value = calc.find("Value")
 
-        if dataset_id is None or not dataset_id.text.strip():
+        if dataset_id is None or not dataset_id.text or not dataset_id.text.strip():
             raise ValueError("Each <Calculation> must have a non-empty <DatasetId>")
-        if key is None or not key.text.strip():
+        if key is None or not key.text or not key.text.strip():
             raise ValueError("Each <Calculation> must have a non-empty <Key>")
         if value is None:
             raise ValueError("Each <Calculation> must have a <Value> tag")
@@ -88,11 +88,11 @@ def validate_dynamic_thresholds(xml_data):
 
     print("XML validation successful!")
 
-# Example XML to validate
+# Example XML with missing PrimaryKey text (to test validation)
 xml_data = """<Rules>
     <DynamicThresholdCalculations>
         <PrimaryKey>
-            <Key>account_id</Key>
+            <Key></Key>  <!-- Empty Key should trigger an error -->
         </PrimaryKey>
         <Columns>
             <Column name="mean" type="float32"></Column>
