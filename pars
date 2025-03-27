@@ -69,30 +69,27 @@ def validate_dynamic_thresholds(xml_data):
         raise ValueError("At least one <Calculation> tag is required")
 
     for calc in calculations:
-        # 3. Validate mandatory fields in <Calculation>
-        dataset_id = calc.find("DatasetId")
-        key = calc.find("Key")
-        value = calc.find("Value")
+        # 3. Validate mandatory fields in <
 
-        if dataset_id is None or not dataset_id.text or not dataset_id.text.strip():
-            raise ValueError("Each <Calculation> must have a non-empty <DatasetId>")
-        if key is None or not key.text or not key.text.strip():
-            raise ValueError("Each <Calculation> must have a non-empty <Key>")
-        if value is None:
-            raise ValueError("Each <Calculation> must have a <Value> tag")
 
-        # 4. Ensure only one <GroupBy> tag inside <Value>
-        group_by_tags = value.findall("GroupBy")
-        if len(group_by_tags) > 1:
-            raise ValueError("Only one <GroupBy> tag is allowed inside <Value>")
 
-    print("XML validation successful!")
+import xmltodict
 
-# Example XML with missing PrimaryKey text (to test validation)
+def extract_dynamic_threshold(xml_data):
+    # Convert XML to dictionary
+    xml_dict = xmltodict.parse(xml_data)
+    
+    # Navigate to the DynamicThresholdCalculations part
+    dynamic_thresholds = xml_dict.get("Rules", {}).get("DynamicThresholdCalculations", {})
+    
+    # Store it separately (you can save it to a file or use it as needed)
+    return dynamic_thresholds
+
+# Example XML Input
 xml_data = """<Rules>
     <DynamicThresholdCalculations>
         <PrimaryKey>
-            <Key></Key>  <!-- Empty Key should trigger an error -->
+            <Key>account_id</Key>
         </PrimaryKey>
         <Columns>
             <Column name="mean" type="float32"></Column>
@@ -118,5 +115,9 @@ xml_data = """<Rules>
     </DynamicThresholdCalculations>
 </Rules>"""
 
-# Run validation
-validate_dynamic_thresholds(xml_data)
+# Extract the dynamic threshold section
+dynamic_threshold_dict = extract_dynamic_threshold(xml_data)
+
+# Print extracted dictionary
+import json
+print(json.dumps(dynamic_threshold_dict, indent=4))
