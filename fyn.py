@@ -4,7 +4,7 @@ from Operations import ExtendedOperator  # Assuming this exists for filtering
 
 def Dynamic_Threshold(xml_data: str, datasets: dict, DYN_CAL_DF: pl.DataFrame, lazy: bool = False):
     """
-    Parses DynamicThresholdCalculations from XML and updates DYN_CAL_DF.
+    Parses DynamicThresholdCalculations from XML, modifies DYN_CAL_DF, and applies group-by calculations.
     
     Parameters:
         xml_data (str): The XML string to parse.
@@ -68,8 +68,37 @@ def Dynamic_Threshold(xml_data: str, datasets: dict, DYN_CAL_DF: pl.DataFrame, l
                 else:
                     raise ValueError(f"Unsupported operator: {operator}")
 
-        # Select necessary columns
-        dataset_df = dataset_df.select([join_key] + list(column_mapping.keys()))
+        # Apply Group By if present
+        value_section = calc.get("Value", {})
+        group_by_section = value_section.get("GroupBy", None)
+
+        if group_by_section:
+            if isinstance(group_by_section, list):
+                raise ValueError("Only one <GroupBy> allowed per <Calculation>.")
+
+            group_col = group_by_section.get("Column")
+            functions = group_by_section.get("Function")
+
+            if not group_col or not functions:
+                raise ValueError("<GroupBy> must have both Column and Function.")
+
+            # Convert function string to list
+            function_list = [func.strip() for func in functions.split(",")]
+
+            # Define aggregation mappings
+            agg_mapping = {
+                "mean": pl.mean,
+                "sum": pl.sum,
+                "std": pl.std,
+                "count": pl.count
+            }
+
+            # Apply group by
+            agg_exprs = [agg_mapping[func](pl.col(group_col)).alias(f"{group_col}_{func}") for func in function_list if func in agg_mapping]
+            dataset_df = dataset_df.groupby(join_key).agg(agg_exprs)
+
+        # Select necessary columns for joining
+        dataset_df = dataset_df.select([join_key] + list(dataset_df.columns))
 
         # Merge with DYN_CAL_DF
         DYN_CAL_DF = DYN_CAL_DF.join(dataset_df, on=join_key, how="left")
