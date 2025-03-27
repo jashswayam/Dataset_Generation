@@ -14,6 +14,37 @@ class ExtendedOperator:
     le = operator.le
 
     @staticmethod
+    def between(
+        s1: Union[pl.Series, pl.Expr, pd.Series],
+        lower: Union[int, float, str],
+        upper: Union[int, float, str]
+    ) -> Union[pl.Series, pl.Expr, pd.Series]:
+        """
+        Checks if values in the series are between lower and upper bounds (inclusive).
+        
+        Args:
+            s1: Input series (Pandas/Polars Series or Polars Expression)
+            lower: Lower bound of the range
+            upper: Upper bound of the range
+        
+        Returns:
+            Boolean series indicating whether each value is within the range
+        """
+        ExtendedOperator._validate_input(s1)
+
+        if isinstance(s1, pd.Series):
+            return (s1 >= lower) & (s1 <= upper)
+
+        elif isinstance(s1, pl.Series):
+            return (s1 >= lower) & (s1 <= upper)
+
+        elif isinstance(s1, pl.Expr):
+            return (s1 >= lower) & (s1 <= upper)
+
+        raise TypeError("Unsupported type for between comparison")
+
+   
+    @staticmethod
     def _validate_input(s1: Union[pl.Series, pl.Expr, pd.Series]) -> None:
         """
         Validate that the first input is a Pandas or Polars Series or Expression.
