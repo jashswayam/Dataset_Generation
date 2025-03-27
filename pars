@@ -45,3 +45,78 @@ if dynamic_threshold is not None:
         pprint(xml_to_dict(dynamic_threshold))
 else:
     print("❌ Tag <DynamicThresholdCalculation> not found.")
+
+
+
+
+import xml.etree.ElementTree as ET
+
+def validate_dynamic_thresholds(xml_data):
+    root = ET.fromstring(xml_data)
+    dynamic_thresholds = root.find("DynamicThresholdCalculations")
+
+    if dynamic_thresholds is None:
+        raise ValueError("Missing <DynamicThresholdCalculations> section")
+
+    # 1. Validate PrimaryKey (account_id should not be null)
+    primary_key = dynamic_thresholds.find("PrimaryKey/Key")
+    if primary_key is None or not primary_key.text.strip():
+        raise ValueError("PrimaryKey <Key> cannot be null or empty")
+
+    # 2. Validate at least one <Calculation> tag
+    calculations = dynamic_thresholds.findall("Calculation")
+    if not calculations:
+        raise ValueError("At least one <Calculation> tag is required")
+
+    for calc in calculations:
+        # 3. Validate mandatory fields in <Calculation>
+        dataset_id = calc.find("DatasetId")
+        key = calc.find("Key")
+        value = calc.find("Value")
+
+        if dataset_id is None or not dataset_id.text.strip():
+            raise ValueError("Each <Calculation> must have a non-empty <DatasetId>")
+        if key is None or not key.text.strip():
+            raise ValueError("Each <Calculation> must have a non-empty <Key>")
+        if value is None:
+            raise ValueError("Each <Calculation> must have a <Value> tag")
+
+        # 4. Ensure only one <GroupBy> tag inside <Value>
+        group_by_tags = value.findall("GroupBy")
+        if len(group_by_tags) > 1:
+            raise ValueError("Only one <GroupBy> tag is allowed inside <Value>")
+
+    print("XML validation successful!")
+
+# Example XML to validate
+xml_data = """<Rules>
+    <DynamicThresholdCalculations>
+        <PrimaryKey>
+            <Key>account_id</Key>
+        </PrimaryKey>
+        <Columns>
+            <Column name="mean" type="float32"></Column>
+            <Column name="std" type="float32"></Column>
+        </Columns>
+        <Calculation>
+            <DatasetId>ds2</DatasetId>
+            <Key>account_id</Key>
+            <Filters>
+                <Filter>
+                    <Column>lookback</Column>
+                    <Operator>between</Operator>
+                    <Value>(2,13)</Value>
+                </Filter>
+            </Filters>
+            <Value>
+                <GroupBy>
+                    <Column>amount</Column>
+                    <Function>mean, std</Function>
+                </GroupBy>
+            </Value>
+        </Calculation>
+    </DynamicThresholdCalculations>
+</Rules>"""
+
+# Run validation
+validate_dynamic_thresholds(xml_data)
