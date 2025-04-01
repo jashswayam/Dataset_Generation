@@ -5,14 +5,14 @@ import ast
 
 class AggregatorHelper:
     @staticmethod
-    def getAggregator(function, column_name):
+    def getAggregator(group_col, function, alias_name):
         agg_mapping = {
-            "mean": pl.col(column_name).mean(),
-            "sum": pl.col(column_name).sum(),
-            "std": pl.col(column_name).std(),
-            "count": pl.col(column_name).count(),
-            "max": pl.col(column_name).max(),
-            "min": pl.col(column_name).min()
+            "mean": pl.col(group_col).mean().alias(alias_name),
+            "sum": pl.col(group_col).sum().alias(alias_name),
+            "std": pl.col(group_col).std().alias(alias_name),
+            "count": pl.col(group_col).count().alias(alias_name),
+            "max": pl.col(group_col).max().alias(alias_name),
+            "min": pl.col(group_col).min().alias(alias_name)
         }
         return agg_mapping.get(function.strip(), None)
 
@@ -94,7 +94,13 @@ def Dynamic_Threshold(xml_data: str, datasets: dict, lazy: bool = False):
             function_list = [func.strip() for func in functions.split(",")]
 
             # Apply group by
-            agg_exprs = [AggregatorHelper.getAggregator(func, col["@name"]).alias(col["@name"]) for func in function_list for col in columns if AggregatorHelper.getAggregator(func, col["@name"]) is not None]
+            agg_exprs = []
+            for func in function_list:
+                for col in columns:
+                    alias_name = col["@name"]
+                    agg_expr = AggregatorHelper.getAggregator(group_col, func, alias_name)
+                    if agg_expr is not None:
+                        agg_exprs.append(agg_expr)
             dataset_df = dataset_df.group_by(join_key).agg(agg_exprs)
             dataset_df = dataset_df.select(list(dataset_df.columns))
 
