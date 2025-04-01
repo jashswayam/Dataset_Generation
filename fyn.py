@@ -95,12 +95,11 @@ def Dynamic_Threshold(xml_data: str, datasets: dict, lazy: bool = False):
 
             # Apply group by
             agg_exprs = []
-            for func in function_list:
-                for col in columns:
-                    alias_name = col["@name"]
-                    agg_expr = AggregatorHelper.getAggregator(group_col, func, alias_name)
-                    if agg_expr is not None:
-                        agg_exprs.append(agg_expr)
+            for func, col in zip(function_list, columns):
+                alias_name = col["@name"]
+                agg_expr = AggregatorHelper.getAggregator(group_col, func, alias_name)
+                if agg_expr is not None:
+                    agg_exprs.append(agg_expr)
             dataset_df = dataset_df.group_by(join_key).agg(agg_exprs)
             dataset_df = dataset_df.select(list(dataset_df.columns))
 
