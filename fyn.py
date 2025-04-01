@@ -40,8 +40,6 @@ def Dynamic_Threshold(xml_data: str, datasets: dict, lazy: bool = False):
         if lazy:
             dataset_df = dataset_df.lazy()
 
-        DYN_CAL_DF = DYN_CAL_DF.lazy()
-
         # Apply filters if present
         filters = calc.get("Filters", {}).get("Filter", [])
         if not isinstance(filters, list):  # Ensure filters is a list
@@ -86,16 +84,16 @@ def Dynamic_Threshold(xml_data: str, datasets: dict, lazy: bool = False):
             dataset_df = dataset_df.group_by(join_key).agg(agg_exprs)
             dataset_df = dataset_df.select(list(dataset_df.columns))
 
+        # Rename and set datatype for columns according to column_mapping before merging
+        for column_name, column_type in column_mapping.items():
+            dataset_df = dataset_df.with_column(pl.col(column_name).cast(column_type).alias(column_name))
+
         # Merge with DYN_CAL_DF
         if initial_flag:
             DYN_CAL_DF = pl.concat([DYN_CAL_DF, dataset_df], how='horizontal')
             initial_flag = False
         else:
             DYN_CAL_DF = DYN_CAL_DF.join(dataset_df, on=join_key, how="left")
-
-        # Rename and set datatype for columns according to column_mapping
-        for column_name, column_type in column_mapping.items():
-            DYN_CAL_DF = DYN_CAL_DF.with_column(pl.col(column_name).cast(column_type).alias(column_name))
 
     return DYN_CAL_DF
 
