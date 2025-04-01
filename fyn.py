@@ -3,6 +3,19 @@ import polars as pl
 from Operations import ExtendedOperator # Assuming this exists for filtering
 import ast
 
+class AggregatorHelper:
+    @staticmethod
+    def getAggregator(function, column_name):
+        agg_mapping = {
+            "mean": pl.col(column_name).mean(),
+            "sum": pl.col(column_name).sum(),
+            "std": pl.col(column_name).std(),
+            "count": pl.col(column_name).count(),
+            "max": pl.col(column_name).max(),
+            "min": pl.col(column_name).min()
+        }
+        return agg_mapping.get(function.strip(), None)
+
 def Dynamic_Threshold(xml_data: str, datasets: dict, lazy: bool = False):
     # Convert XML to dict
     xml_dict = xmltodict.parse(xml_data)
@@ -80,18 +93,8 @@ def Dynamic_Threshold(xml_data: str, datasets: dict, lazy: bool = False):
             # Convert function string to list
             function_list = [func.strip() for func in functions.split(",")]
 
-            # Define aggregation mappings
-            agg_mapping = {
-                "mean": pl.col(group_col).mean(),
-                "sum": pl.col(group_col).sum(),
-                "std": pl.col(group_col).std(),
-                "count": pl.col(group_col).count(),
-                "max": pl.col(group_col).max(),
-                "min": pl.col(group_col).min()
-            }
-
             # Apply group by
-            agg_exprs = [agg_mapping[func.strip()].alias(f"{group_col}_{func}") for func in function_list if func in agg_mapping]
+            agg_exprs = [AggregatorHelper.getAggregator(func, col["@name"]) for func in function_list for col in columns if func in AggregatorHelper.getAggregator(func, col["@name"])]
             dataset_df = dataset_df.group_by(join_key).agg(agg_exprs)
             dataset_df = dataset_df.select(list(dataset_df.columns))
 
