@@ -1,298 +1,109 @@
-import polars as pl
-import pandas as pd
-import operator
-from typing import Union
+import xmltodict import polars as pl from Operations import ExtendedOperator  # Assuming this exists for filtering import ast
 
-class ExtendedOperator:
-    """Custom comparison functions for Pandas and Polars."""
+def Dynamic_Threshold(xml_data: str, datasets: dict, lazy: bool = False): # Convert XML to dict xml_dict = xmltodict.parse(xml_data) dynamic_thresholds = xml_dict.get("Rule", {}).get("DynamicThresholdCalculations", {})
 
-    eq = operator.eq
-    ne = operator.ne
-    gt = operator.gt
-    lt = operator.lt
-    ge = operator.ge
-    le = operator.le
+# Extract Primary Key for DYN_CAL_DF
+primary_key = dynamic_thresholds.get("PrimaryKey", {}).get("Key")
+if not primary_key or not primary_key.strip():
+    raise ValueError("PrimaryKey <Key> cannot be null or empty")
 
-    @staticmethod
-    def between(
-        s1: Union[pl.Series, pl.Expr, pd.Series],
-        lower: Union[int, float, str],
-        upper: Union[int, float, str]
-    ) -> Union[pl.Series, pl.Expr, pd.Series]:
-        """
-        Checks if values in the series are between lower and upper bounds (inclusive).
+# Process each Calculation
+calculations = dynamic_thresholds.get("Calculation", [])
+if not isinstance(calculations, list):  # Ensure it's always a list
+    calculations = [calculations]
+
+DYN_CAL_DF = pl.DataFrame()
+initial_flag = True
+
+for calc in calculations:
+    dataset_id = calc.get("DatasetId")
+    join_key = calc.get("Keys", {}).get("Key")
+    columns = calc.get("Columns", {}).get("Column", [])
+    
+    # Ensure columns is always a list
+    if not isinstance(columns, list):
+        columns = [columns]
+    
+    # Convert column details to a dictionary {name: type}
+    column_mapping = {col["@name"]: col["@type"] for col in columns if "@name" in col}
+    
+    dataset_df = datasets[dataset_id]
+    
+    # Ensure lazy execution if needed
+    if lazy:
+        dataset_df = dataset_df.lazy()
+        DYN_CAL_DF = DYN_CAL_DF.lazy()
+    
+    # Apply filters if present
+    filters = calc.get("Filters", {}).get("Filter", [])
+    if not isinstance(filters, list):
+        filters = [filters]
+    
+    for flt in filters:
+        column, operator, value = flt.get("Column"), flt.get("Operator"), flt.get("Value")
+        if column and operator and value:
+            operation = getattr(ExtendedOperator, operator, None)
+            try:
+                value = ast.literal_eval(value)
+            except (ValueError, SyntaxError):
+                pass
+            if operation:
+                dataset_df = dataset_df.filter(operation(dataset_df.select(column).collect()[column], value))
+            else:
+                raise ValueError(f"Unsupported operator: {operator}")
+    
+    # Apply Group By if present
+    value_section = calc.get("Value", {})
+    group_by_section = value_section.get("GroupBy")
+    if group_by_section:
+        group_col = group_by_section.get("Column")
+        functions = group_by_section.get("Function", "").split(",")
         
-        Args:
-            s1: Input series (Pandas/Polars Series or Polars Expression)
-            lower: Lower bound of the range
-            upper: Upper bound of the range
+        agg_mapping = {
+            "mean": pl.col(group_col).mean(),
+            "sum": pl.col(group_col).sum(),
+            "std": pl.col(group_col).std(),
+            "count": pl.col(group_col).count(),
+            "max": pl.col(group_col).max(),
+            "min": pl.col(group_col).min()
+        }
         
-        Returns:
-            Boolean series indicating whether each value is within the range
-        """
-        ExtendedOperator._validate_input(s1)
+        agg_exprs = [agg_mapping[func.strip()].alias(f"{group_col}_{func}") for func in functions if func.strip() in agg_mapping]
+        dataset_df = dataset_df.group_by(join_key).agg(agg_exprs)
+    
+    dataset_df = dataset_df.select(list(dataset_df.columns))
+    
+    # Merge with DYN_CAL_DF
+    if initial_flag:
+        DYN_CAL_DF = dataset_df
+        initial_flag = False
+    else:
+        DYN_CAL_DF = DYN_CAL_DF.join(dataset_df, on=join_key, how="left")
+    
+    # Rename columns and set data types according to column_mapping
+    dtype_map = {
+        "string": pl.Utf8,
+        "int": pl.Int64, "integer": pl.Int64, "int64": pl.Int64,
+        "int32": pl.Int32, "int16": pl.Int16, "int8": pl.Int8,
+        "uint32": pl.UInt32, "uint64": pl.UInt64,
+        "float": pl.Float64, "double": pl.Float64, "float64": pl.Float64,
+        "float32": pl.Float32, "bool": pl.Boolean, "boolean": pl.Boolean,
+        "date": pl.Date, "datetime": pl.Datetime
+    }
+    
+    cast_exprs = [pl.col(col_name).cast(dtype_map[col_type.lower()]).alias(col_name) 
+                  for col_name, col_type in column_mapping.items() 
+                  if col_type.lower() in dtype_map and col_name in DYN_CAL_DF.columns]
+    
+    if cast_exprs:
+        DYN_CAL_DF = DYN_CAL_DF.with_columns(cast_exprs)
 
-        if isinstance(s1, pd.Series):
-            return (s1 >= lower) & (s1 <= upper)
+return DYN_CAL_DF
 
-        elif isinstance(s1, pl.Series):
-            return (s1 >= lower) & (s1 <= upper)
+if name == "main": with open('C:/Users/h59257/Downloads/rule_2.xml', 'r', encoding='utf-8') as file: xml_data = file.read()
 
-        elif isinstance(s1, pl.Expr):
-            return (s1 >= lower) & (s1 <= upper)
+datasets = {"ds2": pl.read_csv("C:/Users/h59257/Downloads/profiles_sgp.csv")}
 
-        raise TypeError("Unsupported type for between comparison")
+DYN_CAL_DF = Dynamic_Threshold(xml_data, datasets, lazy=True).collect()
+print(DYN_CAL_DF)
 
-   
-    @staticmethod
-    def _validate_input(s1: Union[pl.Series, pl.Expr, pd.Series]) -> None:
-        """
-        Validate that the first input is a Pandas or Polars Series or Expression.
-        
-        Raises:
-            TypeError: If the input is not a supported type.
-        """
-        if not isinstance(s1, (pd.Series, pl.Series, pl.Expr)):
-            raise TypeError(f"First argument must be a Pandas/Polars Series or Polars Expression. Got {type(s1)}")
-
-    @staticmethod
-    def list_in_list(a: str, b: str) -> bool:
-        """
-        Checks if all elements in string 'a' (comma-separated) are in string 'b'.
-        """
-        a_set = set(map(str.strip, a.split(','))) if isinstance(a, str) else set()
-        b_set = set(map(str.strip, b.split(','))) if isinstance(b, str) else set()
-        return a_set.issubset(b_set)
-
-    @staticmethod
-    def list_not_in_list(a: str, b: str) -> bool:
-        """
-        Checks if no elements in string 'a' (comma-separated) are in string 'b'.
-        """
-        a_set = set(map(str.strip, a.split(','))) if isinstance(a, str) else set()
-        b_set = set(map(str.strip, b.split(','))) if isinstance(b, str) else set()
-        return len(a_set.intersection(b_set)) == 0
-
-    @staticmethod
-    def list_contains(
-        s1: Union[pl.Series, pl.Expr, pd.Series],
-        s2: Union[pl.Series, pl.Expr, pd.Series, str]
-    ) -> Union[pl.Series, pl.Expr, pd.Series]:
-        """
-        Checks if string 's2' contains at least one element from the comma-separated list in 's1'.
-        """
-        ExtendedOperator._validate_input(s1)
-
-        if isinstance(s1, pd.Series):
-            if isinstance(s2, str):
-                return s1.apply(lambda x: any(
-                    item.strip() in s2 
-                    for item in str(x).split(',') if item.strip()
-                ))
-            elif isinstance(s2, pd.Series):
-                return s1.combine(s2, lambda x, y: any(
-                    item.strip() in str(y) 
-                    for item in str(x).split(',') if item.strip()
-                ))
-
-        elif isinstance(s1, pl.Series):
-            if isinstance(s2, str):
-                return s1.map_elements(lambda x: any(
-                    item.strip() in s2 
-                    for item in str(x).split(',') if item.strip()
-                ))
-            elif isinstance(s2, pl.Series):
-                return pl.Series([
-                    any(
-                        item.strip() in str(val2) 
-                        for item in str(val1).split(',') if item.strip()
-                    )
-                    for val1, val2 in zip(s1, s2)
-                ])
-
-        elif isinstance(s1, pl.Expr):
-            if isinstance(s2, str):
-                return s1.map_elements(lambda x: any(
-                    item.strip() in s2 
-                    for item in str(x).split(',') if item.strip()
-                ))
-            elif isinstance(s2, pl.Expr):
-                return s1.struct.field("col1").map_elements(
-                    lambda x, y: any(
-                        item.strip() in str(y) 
-                        for item in str(x).split(',') if item.strip()
-                    ),
-                    return_dtype=pl.Boolean
-                )
-
-        raise TypeError("Unsupported types for list_contains comparison")
-
-    @staticmethod
-    def list_not_contains(
-        s1: Union[pl.Series, pl.Expr, pd.Series],
-        s2: Union[pl.Series, pl.Expr, pd.Series, str]
-    ) -> Union[pl.Series, pl.Expr, pd.Series]:
-        """
-        Checks if no elements from the comma-separated list in 's1' are in 's2'.
-        """
-        ExtendedOperator._validate_input(s1)
-
-        if isinstance(s1, pd.Series):
-            if isinstance(s2, str):
-                return s1.apply(lambda x: not any(
-                    item.strip() in s2 
-                    for item in str(x).split(',') if item.strip()
-                ))
-            elif isinstance(s2, pd.Series):
-                return s1.combine(s2, lambda x, y: not any(
-                    item.strip() in str(y) 
-                    for item in str(x).split(',') if item.strip()
-                ))
-
-        elif isinstance(s1, pl.Series):
-            if isinstance(s2, str):
-                return s1.map_elements(lambda x: not any(
-                    item.strip() in s2 
-                    for item in str(x).split(',') if item.strip()
-                ))
-            elif isinstance(s2, pl.Series):
-                return pl.Series([
-                    not any(
-                        item.strip() in str(val2) 
-                        for item in str(val1).split(',') if item.strip()
-                    )
-                    for val1, val2 in zip(s1, s2)
-                ])
-
-        elif isinstance(s1, pl.Expr):
-            if isinstance(s2, str):
-                return s1.map_elements(lambda x: not any(
-                    item.strip() in s2 
-                    for item in str(x).split(',') if item.strip()
-                ))
-            elif isinstance(s2, pl.Expr):
-                return s1.struct.field("col1").map_elements(
-                    lambda x, y: not any(
-                        item.strip() in str(y) 
-                        for item in str(x).split(',') if item.strip()
-                    ),
-                    return_dtype=pl.Boolean
-                )
-
-        raise TypeError("Unsupported types for list_not_contains comparison")
-
-    @staticmethod
-    def list_in(
-        s1: Union[pl.Series, pl.Expr, pd.Series],
-        s2: Union[pl.Series, pl.Expr, pd.Series, str]
-    ) -> Union[pl.Series, pl.Expr, pd.Series]:
-        """
-        Applies `list_in_list` logic to Pandas and Polars Series or Expressions.
-        """
-        ExtendedOperator._validate_input(s1)
-
-        if isinstance(s1, pd.Series):
-            if isinstance(s2, str):
-                return s1.apply(lambda x: ExtendedOperator.list_in_list(x, s2))
-            elif isinstance(s2, pd.Series):
-                return s1.combine(s2, ExtendedOperator.list_in_list)
-
-        elif isinstance(s1, pl.Series):
-            if isinstance(s2, str):
-                return s1.map_elements(lambda x: ExtendedOperator.list_in_list(x, s2))
-            elif isinstance(s2, pl.Series):
-                return pl.Series([
-                    ExtendedOperator.list_in_list(val1, val2) 
-                    for val1, val2 in zip(s1, s2)
-                ])
-
-        elif isinstance(s1, pl.Expr):
-            if isinstance(s2, str):
-                return s1.map_elements(lambda x: ExtendedOperator.list_in_list(x, s2))
-            elif isinstance(s2, pl.Expr):
-                return s1.struct.field("col1").map_elements(
-                    lambda x, y: ExtendedOperator.list_in_list(x, y),
-                    return_dtype=pl.Boolean
-                )
-
-        raise TypeError("Unsupported types for list_in comparison")
-
-    @staticmethod
-    def list_not_in(
-        s1: Union[pl.Series, pl.Expr, pd.Series],
-        s2: Union[pl.Series, pl.Expr, pd.Series, str]
-    ) -> Union[pl.Series, pl.Expr, pd.Series]:
-        """
-        Applies `list_not_in_list` logic to Pandas and Polars Series or Expressions.
-        """
-        ExtendedOperator._validate_input(s1)
-
-        if isinstance(s1, pd.Series):
-            if isinstance(s2, str):
-                return s1.apply(lambda x: ExtendedOperator.list_not_in_list(x, s2))
-            elif isinstance(s2, pd.Series):
-                return s1.combine(s2, ExtendedOperator.list_not_in_list)
-
-        elif isinstance(s1, pl.Series):
-            if isinstance(s2, str):
-                return s1.map_elements(lambda x: ExtendedOperator.list_not_in_list(x, s2))
-            elif isinstance(s2, pl.Series):
-                return pl.Series([
-                    ExtendedOperator.list_not_in_list(val1, val2) 
-                    for val1, val2 in zip(s1, s2)
-                ])
-
-        elif isinstance(s1, pl.Expr):
-            if isinstance(s2, str):
-                return s1.map_elements(lambda x: ExtendedOperator.list_not_in_list(x, s2))
-            elif isinstance(s2, pl.Expr):
-                return s1.struct.field("col1").map_elements(
-                    lambda x, y: ExtendedOperator.list_not_in_list(x, y),
-                    return_dtype=pl.Boolean
-                )
-
-        raise TypeError("Unsupported types for list_not_in comparison")
-
-# Example Usage
-op = ExtendedOperator
-
-# Pandas Example
-pd_series_1 = pd.Series(['a,b', 'a,b,c', 'd,e'])
-pd_series_2 = pd.Series(['a,b,c', 'b,c,d', 'a,e'])
-print("Pandas list_in:")
-print(op.list_in(pd_series_1, pd_series_2))  # Expected output: [True, True, False]
-print("\nPandas list_not_in:")
-print(op.list_not_in(pd_series_1, pd_series_2))  # Expected output: [False, False, True]
-print("\nPandas list_contains:")
-print(op.list_contains(pd_series_1, pd_series_2))  # Expected output: [True, True, True]
-print("\nPandas list_not_contains:")
-print(op.list_not_contains(pd_series_1, pd_series_2))  # Expected output: [False, False, False]
-
-# Polars Example
-pl_series_1 = pl.Series(['a,b', 'a,b,c', 'd,e'])
-pl_series_2 = pl.Series(['a,b,c', 'b,c,d', 'a,e'])
-print("\nPolars list_in:")
-print(op.list_in(pl_series_1, pl_series_2))  # Expected output: [True, True, False]
-print("\nPolars list_not_in:")
-print(op.list_not_in(pl_series_1, pl_series_2))  # Expected output: [False, False, True]
-print("\nPolars list_contains:")
-print(op.list_contains(pl_series_1, pl_series_2))  # Expected output: [True, True, True]
-print("\nPolars list_not_contains:")
-print(op.list_not_contains(pl_series_1, pl_series_2))  # Expected output: [False, False, False]
-
-# Polars LazyFrame Example
-df = pl.LazyFrame({"col1": ['a,b', 'a,b,c', 'd,e'], "col2": ['a,b,c', 'b,c,d', 'a,e']})
-filtered_df = df.with_columns(
-    list_in=pl.struct(["col1", "col2"]).map_elements(lambda x: op.list_in_list(x["col1"], x["col2"])),
-    list_not_in=pl.struct(["col1", "col2"]).map_elements(lambda x: op.list_not_in_list(x["col1"], x["col2"])),
-    list_contains=pl.struct(["col1", "col2"]).map_elements(lambda x: any(
-        item.strip() in str(x["col2"]) 
-        for item in str(x["col1"]).split(',') if item.strip()
-    )),
-    list_not_contains=pl.struct(["col1", "col2"]).map_elements(lambda x: not any(
-        item.strip() in str(x["col2"]) 
-        for item in str(x["col1"]).split(',') if item.strip()
-    ))
-)
-print("\nPolars LazyFrame Example:")
-print(filtered_df.collect())
