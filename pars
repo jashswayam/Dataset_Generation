@@ -1,156 +1,109 @@
-import xml.etree.ElementTree as ET
-from pprint import pprint
+import xmltodict import polars as pl from Operations import ExtendedOperator  # Assuming this exists for filtering import ast
 
-xml_data = """<Rule>
-    <settings>
-        <DynamicThresholdCalculation>
-            <Key>12345</Key>
-            <columns>some_column</columns>
-            <enabled>true</enabled>
-            <threshold>0.75</threshold>
-            <mode>adaptive</mode>
-            <extraParam>value</extraParam>
-            <nested>
-                <subParam>123</subParam>
-            </nested>
-            <calculations>
-                <formula>x + y</formula>
-            </calculations>
-        </DynamicThresholdCalculation>
-    </settings>
-</Rule>"""
+def Dynamic_Threshold(xml_data: str, datasets: dict, lazy: bool = False): # Convert XML to dict xml_dict = xmltodict.parse(xml_data) dynamic_thresholds = xml_dict.get("Rule", {}).get("DynamicThresholdCalculations", {})
 
-# Parse and extract
-root = ET.fromstring(xml_data)
-dynamic_threshold = root.find(".//DynamicThresholdCalculation")
+# Extract Primary Key for DYN_CAL_DF
+primary_key = dynamic_thresholds.get("PrimaryKey", {}).get("Key")
+if not primary_key or not primary_key.strip():
+    raise ValueError("PrimaryKey <Key> cannot be null or empty")
 
-# Convert to dictionary (handles nested elements)
-def xml_to_dict(element):
-    return {child.tag: xml_to_dict(child) if list(child) else child.text for child in element}
+# Process each Calculation
+calculations = dynamic_thresholds.get("Calculation", [])
+if not isinstance(calculations, list):  # Ensure it's always a list
+    calculations = [calculations]
 
-# Validate conditions
-if dynamic_threshold is not None:
-    key = dynamic_threshold.find("Key")
-    columns = dynamic_threshold.find("columns")
-    calculations = dynamic_threshold.findall("calculations")
+DYN_CAL_DF = pl.DataFrame()
+initial_flag = True
 
-    if key is None or not key.text.strip():
-        print("❌ Validation Failed: <Key> tag is missing or empty.")
-    elif columns is None:
-        print("❌ Validation Failed: <columns> tag is missing.")
-    elif len(calculations) != 1:
-        print(f"❌ Validation Failed: Expected 1 <calculations> tag, found {len(calculations)}.")
+for calc in calculations:
+    dataset_id = calc.get("DatasetId")
+    join_key = calc.get("Keys", {}).get("Key")
+    columns = calc.get("Columns", {}).get("Column", [])
+    
+    # Ensure columns is always a list
+    if not isinstance(columns, list):
+        columns = [columns]
+    
+    # Convert column details to a dictionary {name: type}
+    column_mapping = {col["@name"]: col["@type"] for col in columns if "@name" in col}
+    
+    dataset_df = datasets[dataset_id]
+    
+    # Ensure lazy execution if needed
+    if lazy:
+        dataset_df = dataset_df.lazy()
+        DYN_CAL_DF = DYN_CAL_DF.lazy()
+    
+    # Apply filters if present
+    filters = calc.get("Filters", {}).get("Filter", [])
+    if not isinstance(filters, list):
+        filters = [filters]
+    
+    for flt in filters:
+        column, operator, value = flt.get("Column"), flt.get("Operator"), flt.get("Value")
+        if column and operator and value:
+            operation = getattr(ExtendedOperator, operator, None)
+            try:
+                value = ast.literal_eval(value)
+            except (ValueError, SyntaxError):
+                pass
+            if operation:
+                dataset_df = dataset_df.filter(operation(dataset_df.select(column).collect()[column], value))
+            else:
+                raise ValueError(f"Unsupported operator: {operator}")
+    
+    # Apply Group By if present
+    value_section = calc.get("Value", {})
+    group_by_section = value_section.get("GroupBy")
+    if group_by_section:
+        group_col = group_by_section.get("Column")
+        functions = group_by_section.get("Function", "").split(",")
+        
+        agg_mapping = {
+            "mean": pl.col(group_col).mean(),
+            "sum": pl.col(group_col).sum(),
+            "std": pl.col(group_col).std(),
+            "count": pl.col(group_col).count(),
+            "max": pl.col(group_col).max(),
+            "min": pl.col(group_col).min()
+        }
+        
+        agg_exprs = [agg_mapping[func.strip()].alias(f"{group_col}_{func}") for func in functions if func.strip() in agg_mapping]
+        dataset_df = dataset_df.group_by(join_key).agg(agg_exprs)
+    
+    dataset_df = dataset_df.select(list(dataset_df.columns))
+    
+    # Merge with DYN_CAL_DF
+    if initial_flag:
+        DYN_CAL_DF = dataset_df
+        initial_flag = False
     else:
-        print("✅ Validation Passed! Extracted Data:")
-        pprint(xml_to_dict(dynamic_threshold))
-else:
-    print("❌ Tag <DynamicThresholdCalculation> not found.")
-
-
-
-
-import xml.etree.ElementTree as ET
-
-def validate_dynamic_thresholds(xml_data):
-    root = ET.fromstring(xml_data)
-    dynamic_thresholds = root.find("DynamicThresholdCalculations")
-
-    if dynamic_thresholds is None:
-        raise ValueError("Missing <DynamicThresholdCalculations> section")
-
-    # 1. Validate PrimaryKey (account_id should not be null)
-    primary_key = dynamic_thresholds.find("PrimaryKey/Key")
-    if primary_key is None or not primary_key.text or not primary_key.text.strip():
-        raise ValueError("PrimaryKey <Key> cannot be null or empty")
-
-    # 2. Validate at least one <Calculation> tag
-    calculations = dynamic_thresholds.findall("Calculation")
-    if not calculations:
-        raise ValueError("At least one <Calculation> tag is required")
-
-    for calc in calculations:
-        # 3. Validate mandatory fields in <
-
-
-
-import xmltodict
-
-def extract_dynamic_threshold(xml_data):
-    # Convert XML to dictionary
-    xml_dict = xmltodict.parse(xml_data)
+        DYN_CAL_DF = DYN_CAL_DF.join(dataset_df, on=join_key, how="left")
     
-    # Navigate to the DynamicThresholdCalculations part
-    dynamic_thresholds = xml_dict.get("Rules", {}).get("DynamicThresholdCalculations", {})
+    # Rename columns and set data types according to column_mapping
+    dtype_map = {
+        "string": pl.Utf8,
+        "int": pl.Int64, "integer": pl.Int64, "int64": pl.Int64,
+        "int32": pl.Int32, "int16": pl.Int16, "int8": pl.Int8,
+        "uint32": pl.UInt32, "uint64": pl.UInt64,
+        "float": pl.Float64, "double": pl.Float64, "float64": pl.Float64,
+        "float32": pl.Float32, "bool": pl.Boolean, "boolean": pl.Boolean,
+        "date": pl.Date, "datetime": pl.Datetime
+    }
     
-    # Store it separately (you can save it to a file or use it as needed)
-    return dynamic_thresholds
+    cast_exprs = [pl.col(col_name).cast(dtype_map[col_type.lower()]).alias(col_name) 
+                  for col_name, col_type in column_mapping.items() 
+                  if col_type.lower() in dtype_map and col_name in DYN_CAL_DF.columns]
+    
+    if cast_exprs:
+        DYN_CAL_DF = DYN_CAL_DF.with_columns(cast_exprs)
 
-# Example XML Input
-xml_data = """<Rules>
-    <DynamicThresholdCalculations>
-        <PrimaryKey>
-            <Key>account_id</Key>
-        </PrimaryKey>
-        <Columns>
-            <Column name="mean" type="float32"></Column>
-            <Column name="std" type="float32"></Column>
-        </Columns>
-        <Calculation>
-            <DatasetId>ds2</DatasetId>
-            <Key>account_id</Key>
-            <Filters>
-                <Filter>
-                    <Column>lookback</Column>
-                    <Operator>between</Operator>
-                    <Value>(2,13)</Value>
-                </Filter>
-            </Filters>
-            <Value>
-                <GroupBy>
-                    <Column>amount</Column>
-                    <Function>mean, std</Function>
-                </GroupBy>
-            </Value>
-        </Calculation>
-    </DynamicThresholdCalculations>
-</Rules>"""
+return DYN_CAL_DF
 
-# Extract the dynamic threshold section
-dynamic_threshold_dict = extract_dynamic_threshold(xml_data)
+if name == "main": with open('C:/Users/h59257/Downloads/rule_2.xml', 'r', encoding='utf-8') as file: xml_data = file.read()
 
-# Print extracted dictionary
-import json
-print(json.dumps(dynamic_threshold_dict, indent=4))
+datasets = {"ds2": pl.read_csv("C:/Users/h59257/Downloads/profiles_sgp.csv")}
 
+DYN_CAL_DF = Dynamic_Threshold(xml_data, datasets, lazy=True).collect()
+print(DYN_CAL_DF)
 
-
-for col_name, col_type in column_mapping.items():
-            if col_name in DYN_CAL_DF.columns:
-                # First rename the column if it exists and needs to be renamed
-                # Then cast it to the specified type
-                if col_type.lower() == "string":
-                    DYN_CAL_DF = DYN_CAL_DF.with_column(pl.col(col_name).cast(pl.Utf8).alias(col_name))
-                elif col_type.lower() in ["int", "integer", "int64"]:
-                    DYN_CAL_DF = DYN_CAL_DF.with_column(pl.col(col_name).cast(pl.Int64).alias(col_name))
-                elif col_type.lower() == "int32":
-                    DYN_CAL_DF = DYN_CAL_DF.with_column(pl.col(col_name).cast(pl.Int32).alias(col_name))
-                elif col_type.lower() == "int16":
-                    DYN_CAL_DF = DYN_CAL_DF.with_column(pl.col(col_name).cast(pl.Int16).alias(col_name))
-                elif col_type.lower() == "int8":
-                    DYN_CAL_DF = DYN_CAL_DF.with_column(pl.col(col_name).cast(pl.Int8).alias(col_name))
-                elif col_type.lower() == "uint32":
-                    DYN_CAL_DF = DYN_CAL_DF.with_column(pl.col(col_name).cast(pl.UInt32).alias(col_name))
-                elif col_type.lower() == "uint64":
-                    DYN_CAL_DF = DYN_CAL_DF.with_column(pl.col(col_name).cast(pl.UInt64).alias(col_name))
-                elif col_type.lower() in ["float", "double", "float64"]:
-                    DYN_CAL_DF = DYN_CAL_DF.with_column(pl.col(col_name).cast(pl.Float64).alias(col_name))
-                elif col_type.lower() == "float32":
-                    DYN_CAL_DF = DYN_CAL_DF.with_column(pl.col(col_name).cast(pl.Float32).alias(col_name))
-                elif col_type.lower() == "decimal":
-                    DYN_CAL_DF = DYN_CAL_DF.with_column(pl.col(col_name).cast(pl.Decimal).alias(col_name))
-                elif col_type.lower() == "bool" or col_type.lower() == "boolean":
-                    DYN_CAL_DF = DYN_CAL_DF.with_column(pl.col(col_name).cast(pl.Boolean).alias(col_name))
-                elif col_type.lower() == "date":
-                    DYN_CAL_DF = DYN_CAL_DF.with_column(pl.col(col_name).cast(pl.Date).alias(col_name))
-                elif col_type.lower() == "datetime":
-                    DYN_CAL_DF = DYN_CAL_DF.with_column(pl.col(col_name).cast(pl.Datetime).alias(col_name))
