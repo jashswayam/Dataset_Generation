@@ -22,6 +22,17 @@ def Dynamic_Threshold(xml_data: str, datasets: dict, lazy: bool = False):
     DYN_CAL_DF = pl.DataFrame()
     initial_flag = True
 
+    def get_polars_type(type_str):
+        type_mapping = {
+            'str': pl.Utf8,
+            'float32': pl.Float32,
+            'float64': pl.Float64,
+            'int32': pl.Int32,
+            'int64': pl.Int64,
+            'bool': pl.Boolean
+        }
+        return type_mapping.get(type_str, pl.Utf8)
+
     for calc in calculations:
         dataset_id = calc.get("DatasetId")
         join_key = calc.get("Keys").get("Key")
@@ -86,7 +97,8 @@ def Dynamic_Threshold(xml_data: str, datasets: dict, lazy: bool = False):
 
         # Rename and set datatype for columns according to column_mapping before merging
         for column_name, column_type in column_mapping.items():
-            dataset_df = dataset_df.with_column(pl.col(column_name).cast(column_type).alias(column_name))
+            polars_type = get_polars_type(column_type)
+            dataset_df = dataset_df.with_column(pl.col(column_name).cast(polars_type).alias(column_name))
 
         # Merge with DYN_CAL_DF
         if initial_flag:
