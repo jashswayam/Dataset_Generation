@@ -1,6 +1,6 @@
 import xmltodict
 import polars as pl
-from Operations import ExtendedOperator # Assuming this exists for filtering
+from Operations import ExtendedOperator  # Assuming this exists for filtering
 import ast
 
 class AggregatorHelper:
@@ -94,7 +94,7 @@ def Dynamic_Threshold(xml_data: str, datasets: dict, lazy: bool = False):
             function_list = [func.strip() for func in functions.split(",")]
 
             # Apply group by
-            agg_exprs = [AggregatorHelper.getAggregator(func, col["@name"]) for func in function_list for col in columns if func in AggregatorHelper.getAggregator(func, col["@name"])]
+            agg_exprs = [AggregatorHelper.getAggregator(func, col["@name"]).alias(col["@name"]) for func in function_list for col in columns if AggregatorHelper.getAggregator(func, col["@name"]) is not None]
             dataset_df = dataset_df.group_by(join_key).agg(agg_exprs)
             dataset_df = dataset_df.select(list(dataset_df.columns))
 
