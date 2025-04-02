@@ -30,7 +30,7 @@ class DataFrameHelper:
         return dataset_df
 
     @staticmethod
-    def apply_filters(dataset_df, filters):
+    def apply_filters(dataset_df, filters, lazy):
         for flt in filters:
             column, operator, value = flt.get("Column"), flt.get("Operator"), flt.get("Value")
             if column and operator and value:
@@ -40,7 +40,10 @@ class DataFrameHelper:
                 except (ValueError):
                     value = value
                 if operation:
-                    dataset_df = dataset_df.filter(operation(dataset_df.select(column).collect()[column], value))
+                    if lazy:
+                        dataset_df = dataset_df.filter(operation(pl.col(column), value))
+                    else:
+                        dataset_df = dataset_df.filter(operation(dataset_df[column], value))
                 else:
                     raise ValueError(f"Unsupported operator: {operator}")
         return dataset_df
@@ -56,7 +59,7 @@ def dynamic_threshold(xml_dict: dict, datasets: dict, lazy: bool = False):
     if not isinstance(calculations, list):
         calculations = [calculations]
 
-    DYN_CAL_DF = pl.DataFrame()
+    DYN_CAL_DF = None
     initial_flag = True
 
     def get_polars_type(type_str):
@@ -89,7 +92,7 @@ def dynamic_threshold(xml_dict: dict, datasets: dict, lazy: bool = False):
         if not isinstance(filters, list):
             filters = [filters]
 
-        dataset_df = DataFrameHelper.apply_filters(dataset_df, filters)
+        dataset_df = DataFrameHelper.apply_filters(dataset_df, filters, lazy)
 
         value_section = calc.get("Value")
         group_by_section = value_section.get("GroupBy") if value_section else None
@@ -105,7 +108,7 @@ def dynamic_threshold(xml_dict: dict, datasets: dict, lazy: bool = False):
             dataset_df = dataset_df.with_columns([pl.col(column_name).cast(polars_type).alias(column_name)])
 
         if initial_flag:
-            DYN_CAL_DF = pl.concat([DYN_CAL_DF.lazy(), dataset_df.lazy()], how='horizontal')
+            DYN_CAL_DF = dataset_df
             initial_flag = False
         else:
             DYN_CAL_DF = DYN_CAL_DF.join(dataset_df, on=join_key, how="left")
@@ -118,6 +121,9 @@ if __name__ == "__main__":
 
     xml_dict = xmltodict.parse(xml_data)
     datasets = {"ds2": pl.read_csv("C:/Users/h59257/Downloads/profiles_sgp.csv")}
-    DYN_CAL_DF = dynamic_threshold(xml_dict, datasets, lazy=True).collect()
+    result_df = dynamic_threshold(xml_dict, datasets, lazy=True)
 
-    print(DYN_CAL_DF)
+    if isinstance(result_df, pl.LazyFrame):
+        result_df = result_df.collect()
+
+    print(result_df)
