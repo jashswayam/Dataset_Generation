@@ -1,123 +1,148 @@
-import xmltodict
 import polars as pl
-from Operations import ExtendedOperator  # Assuming this exists for filtering
-import ast
+from typing import List, Union, Dict, Any
 
-class AggregatorHelper:
+class Aggregators:
     @staticmethod
-    def get_aggregator(group_col, function, alias_name):
-        agg_mapping = {
-            "mean": pl.col(group_col).mean().alias(alias_name),
-            "sum": pl.col(group_col).sum().alias(alias_name),
-            "std": pl.col(group_col).std().alias(alias_name),
-            "count": pl.col(group_col).count().alias(alias_name),
-            "max": pl.col(group_col).max().alias(alias_name),
-            "min": pl.col(group_col).min().alias(alias_name)
-        }
-        return agg_mapping.get(function.strip(), None)
+    def get_aggregator(column: str, func: str, alias_name: str = None) -> Union[pl.Expr, None]:
+        """
+        Get the appropriate Polars aggregator expression based on function name
+        
+        Parameters:
+        - column: Column to aggregate
+        - func: Aggregation function name (mean, std, min, max, etc.)
+        - alias_name: Optional alias for the result column
+        
+        Returns:
+        - Polars expression for aggregation
+        """
+        if not alias_name:
+            alias_name = f"{func}_{column}"
+            
+        if func.lower() == "mean":
+            return pl.col(column).mean().alias(alias_name)
+        elif func.lower() == "std":
+            return pl.col(column).std().alias(alias_name)
+        elif func.lower() == "min":
+            return pl.col(column).min().alias(alias_name)
+        elif func.lower() == "max":
+            return pl.col(column).max().alias(alias_name)
+        elif func.lower() == "sum":
+            return pl.col(column).sum().alias(alias_name)
+        elif func.lower() == "count":
+            return pl.col(column).count().alias(alias_name)
+        elif func.lower() == "median":
+            return pl.col(column).median().alias(alias_name)
+        elif func.lower() == "var":
+            return pl.col(column).var().alias(alias_name)
+        elif func.lower() == "first":
+            return pl.col(column).first().alias(alias_name)
+        elif func.lower() == "last":
+            return pl.col(column).last().alias(alias_name)
+        else:
+            print(f"Warning: Unknown aggregation function '{func}'")
+            return None
 
-class DataFrameHelper:
+class DFoperations:
     @staticmethod
-    def apply_group_by(dataset_df, join_key, group_col, columns, functions):
-        function_list = [func.strip() for func in functions.split(",")]
+    def df_group_by(dataset_df, group_key, group_col, columns=None, functions=None):
+        """
+        Group a dataframe by keys and apply aggregation functions to columns
+        
+        Parameters:
+        - dataset_df: Input dataframe
+        - group_key: Keys to group by
+        - group_col: Column to apply aggregation functions to
+        - columns: List of columns for aggregation (defaults to group_col if None)
+        - functions: List of aggregation functions to apply
+        
+        Returns:
+        - Aggregated dataframe
+        """
+        # Ensure group_key is a list
+        if isinstance(group_key, str):
+            group_key = [group_key]
+            
+        # If columns not provided, use group_col
+        if columns is None:
+            columns = [group_col]
+            
+        # If functions is a string, convert to list
+        if isinstance(functions, str):
+            functions = [func.strip() for func in functions.split(",")]
+        elif not isinstance(functions, list):
+            functions = [functions]
+            
+        # Prepare aggregation expressions
         agg_exprs = []
-        for func, col in zip(function_list, columns):
-            alias_name = col["@name"]
-            agg_expr = AggregatorHelper.get_aggregator(group_col, func, alias_name)
+        
+        # For simple cases with one function and one column
+        if len(functions) == 1 and len(columns) == 1:
+            func = functions[0]
+            col = columns[0]
+            # Create an alias that will match the expected format in derived values
+            alias_name = func
+            agg_expr = Aggregators.get_aggregator(col, func, alias_name)
             if agg_expr is not None:
                 agg_exprs.append(agg_expr)
-        dataset_df = dataset_df.groupby(join_key).agg(agg_exprs)
+        else:
+            # For more complex cases with multiple functions or columns
+            for func, col in zip(functions, columns):
+                alias_name = f"{col}_{func}"
+                agg_expr = Aggregators.get_aggregator(col, func, alias_name)
+                if agg_expr is not None:
+                    agg_exprs.append(agg_expr)
+        
+        # Apply groupby and aggregation
+        if agg_exprs:
+            dataset_df = dataset_df.group_by(group_key).agg(agg_exprs)
+            
         return dataset_df
-
+    
     @staticmethod
-    def apply_filters(dataset_df, filters):
+    def df_filters(dataset_df, filters):
+        """
+        Apply filters to a dataframe
+        
+        Parameters:
+        - dataset_df: Input dataframe
+        - filters: List of filter dictionaries with Column, Operator, and Value
+        
+        Returns:
+        - Filtered dataframe
+        """
         for flt in filters:
             column, operator, value = flt.get("Column"), flt.get("Operator"), flt.get("Value")
+            
             if column and operator and value:
-                operation = getattr(ExtendedOperator, operator, None)
-                try:
-                    value = ast.literal_eval(value)
-                except (ValueError):
-                    value = value
-                if operation:
-                    dataset_df = dataset_df.filter(operation(pl.col(column), value))
+                # Handle different operator types
+                if operator.lower() == "eq":
+                    dataset_df = dataset_df.filter(pl.col(column) == value)
+                elif operator.lower() == "neq":
+                    dataset_df = dataset_df.filter(pl.col(column) != value)
+                elif operator.lower() == "gt":
+                    dataset_df = dataset_df.filter(pl.col(column) > value)
+                elif operator.lower() == "lt":
+                    dataset_df = dataset_df.filter(pl.col(column) < value)
+                elif operator.lower() == "gte":
+                    dataset_df = dataset_df.filter(pl.col(column) >= value)
+                elif operator.lower() == "lte":
+                    dataset_df = dataset_df.filter(pl.col(column) <= value)
+                elif operator.lower() == "between":
+                    # Assume value is in format "(lower, upper)" or similar
+                    try:
+                        lower, upper = eval(value)
+                        dataset_df = dataset_df.filter((pl.col(column) >= lower) & (pl.col(column) <= upper))
+                    except Exception as e:
+                        print(f"Error parsing 'between' values {value}: {e}")
+                elif operator.lower() == "in":
+                    try:
+                        values = eval(value)
+                        dataset_df = dataset_df.filter(pl.col(column).is_in(values))
+                    except Exception as e:
+                        print(f"Error parsing 'in' values {value}: {e}")
+                elif operator.lower() == "like":
+                    dataset_df = dataset_df.filter(pl.col(column).str.contains(value))
                 else:
-                    raise ValueError(f"Unsupported operator: {operator}")
+                    print(f"Warning: Unsupported operator '{operator}'")
+        
         return dataset_df
-
-def dynamic_threshold(xml_dict: dict, datasets: dict, lazy: bool = False):
-    dynamic_thresholds = xml_dict.get("Rule", {}).get("DynamicThresholdCalculations", {})
-
-    primary_key = dynamic_thresholds.get("PrimaryKey", {}).get("Key", None)
-    if not primary_key or not primary_key.strip():
-        raise ValueError("PrimaryKey <Key> cannot be null or empty")
-
-    calculations = dynamic_thresholds.get("Calculation", [])
-    if not isinstance(calculations, list):
-        calculations = [calculations]
-
-    DYN_CAL_DF = pl.DataFrame()
-    initial_flag = True
-
-    def get_polars_type(type_str):
-        type_mapping = {
-            'str': pl.Utf8,
-            'float32': pl.Float32,
-            'float64': pl.Float64,
-            'int32': pl.Int32,
-            'int64': pl.Int64,
-            'bool': pl.Boolean
-        }
-        return type_mapping.get(type_str, pl.Utf8)
-
-    for calc in calculations:
-        dataset_id = calc.get("DatasetId")
-        join_key = calc.get("Keys").get("Key")
-        columns = calc.get("Columns", {}).get("Column", [])
-
-        if not isinstance(columns, list):
-            columns = [columns]
-
-        column_mapping = {col["@name"]: col["@type"] for col in columns if "@name" in col}
-
-        dataset_df = datasets[dataset_id]
-
-        if lazy:
-            dataset_df = dataset_df.lazy()
-
-        filters = calc.get("Filters", {}).get("Filter", [])
-        if not isinstance(filters, list):
-            filters = [filters]
-
-        dataset_df = DataFrameHelper.apply_filters(dataset_df, filters)
-
-        value_section = calc.get("Value")
-        group_by_section = value_section.get("GroupBy") if value_section else None
-
-        if group_by_section:
-            group_col = group_by_section.get("Column")
-            functions = group_by_section.get("Function")
-            dataset_df = DataFrameHelper.apply_group_by(dataset_df, join_key, group_col, columns, functions)
-            dataset_df = dataset_df.select(list(dataset_df.columns))
-
-        for column_name, column_type in column_mapping.items():
-            polars_type = get_polars_type(column_type)
-            dataset_df = dataset_df.with_columns([pl.col(column_name).cast(polars_type).alias(column_name)])
-
-        if initial_flag:
-            DYN_CAL_DF = pl.concat([DYN_CAL_DF.lazy(), dataset_df.lazy()], how='horizontal')
-            initial_flag = False
-        else:
-            DYN_CAL_DF = DYN_CAL_DF.join(dataset_df, on=join_key, how="left")
-
-    return DYN_CAL_DF
-
-if __name__ == "__main__":
-    with open('C:/Users/h59257/Downloads/rule_2.xml', 'r', encoding='utf-8') as file:
-        xml_data = file.read()
-
-    xml_dict = xmltodict.parse(xml_data)
-    datasets = {"ds2": pl.read_csv("C:/Users/h59257/Downloads/profiles_sgp.csv")}
-    DYN_CAL_DF = dynamic_threshold(xml_dict, datasets, lazy=True).collect()
-
-    print(DYN_CAL_DF)
