@@ -1,6 +1,5 @@
 import polars as pl
 from utils import DFoperations, ensure_list
-
 import re
 
 def parse_expression(expression, dataset_columns=None):
@@ -9,7 +8,6 @@ def parse_expression(expression, dataset_columns=None):
     'derived.mean + derived.std * th.std_cycles'
     into valid Polars expressions.
     """
-
     # Try evaluating as literal
     try:
         if expression.lower() in ('true', 'false'):
@@ -114,7 +112,7 @@ def dynamic_threshold(dynamic_thresholds: dict, datasets: dict, event_level_dict
                     value_text = filter_def.get("Value", "")
                     
                     # Parse value using the expression parser
-                    value = evaluate_expression(filtered_dataset_df, value_text, dataset_columns)
+                    value = parse_expression(value_text, dataset_columns)
                     
                     # Apply filter based on operator
                     if operator.lower() == "eq":
@@ -185,7 +183,7 @@ def dynamic_threshold(dynamic_thresholds: dict, datasets: dict, event_level_dict
                 
                 # Evaluate the expression
                 try:
-                    result_value = evaluate_expression(result_df, expression, dataset_columns)
+                    result_value = parse_expression(expression, dataset_columns)
                     dth_updates[name] = result_value.cast(get_polars_type(val_type))
                 except Exception as e:
                     print(f"Error evaluating expression '{expression}': {e}")
