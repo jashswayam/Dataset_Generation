@@ -1,62 +1,52 @@
 import polars as pl
 from utils import DFoperations, ensure_list
 
+import re
+
 def parse_expression(expression, dataset_columns=None):
     """
-    Parse expressions with various prefixes:
-    - derived. : refers to derived_values struct
-    - dth. : refers to dynamic threshold struct
-    - th. : refers to static threshold struct
-    - ev. : refers to columns in event level dataframe
-    - ds. : refers to columns in the dataset being processed
-    
-    If no prefix is present, treat as a literal value.
+    Parses expressions like:
+    'derived.mean + derived.std * th.std_cycles'
+    into valid Polars expressions.
     """
-    # First attempt to evaluate directly to handle literals
+
+    # Try evaluating as literal
     try:
-        # Check if it's a numeric literal or boolean
         if expression.lower() in ('true', 'false'):
             return expression.lower() == 'true'
-        
         value = eval(expression)
         if isinstance(value, (int, float, bool, str, tuple, list)):
             return value
     except:
         pass
-    
-    # Handle prefixed expressions
-    if '.' in expression:
-        prefix, field = expression.split('.', 1)
-        
-        if prefix == 'derived':
-            return f"pl.col('derived_values').struct.field('{field}')"
-        elif prefix == 'dth':
-            return f"pl.col('dynamic_thresholds').struct.field('{field}')"
-        elif prefix == 'th':
-            return f"pl.col('static_thresholds').struct.field('{field}')"
-        elif prefix == 'ev':
-            return f"pl.col('{field}')"
-        elif prefix == 'ds' and dataset_columns and field in dataset_columns:
-            return f"pl.col('{field}')"
-    
-    # If no special prefix and not a literal, return as is
-    return expression
 
-def evaluate_expression(df, expression, dataset_columns=None):
-    """
-    Evaluate a parsed expression against a dataframe
-    """
-    parsed_expr = parse_expression(expression, dataset_columns)
-    
-    # If the parsed expression is a literal value, return it
-    if not isinstance(parsed_expr, str) or not parsed_expr.startswith("pl."):
-        return parsed_expr
-    
-    # Otherwise evaluate the Polars expression
+    # Map for replacing prefixes with polars expressions
+    prefix_map = {
+        "derived": "pl.col('derived_values').struct.field",
+        "dth": "pl.col('dynamic_thresholds').struct.field",
+        "th": "pl.col('static_thresholds').struct.field",
+        "ev": "pl.col",
+        "ds": "pl.col",  # Only valid if field exists in dataset_columns
+    }
+
+    # Function to replace matched prefix.field
+    def replace_match(match):
+        prefix, field = match.group(1), match.group(2)
+        if prefix == "ds" and dataset_columns and field not in dataset_columns:
+            return match.group(0)  # Leave unchanged
+        repl = prefix_map.get(prefix)
+        if repl:
+            return f"{repl}('{field}')"
+        return match.group(0)
+
+    # Replace all instances of prefix.field
+    pattern = r'\b(derived|dth|th|ev|ds)\.([a-zA-Z_][a-zA-Z0-9_]*)'
+    parsed = re.sub(pattern, replace_match, expression)
+
     try:
-        return eval(parsed_expr)
+        return eval(parsed)
     except Exception as e:
-        print(f"Error evaluating expression '{parsed_expr}': {e}")
+        print(f"Error evaluating expression '{parsed}': {e}")
         return None
 
 def dynamic_threshold(dynamic_thresholds: dict, datasets: dict, event_level_dict: dict, lazy: bool = False):
