@@ -12,13 +12,16 @@ def utils_eventlevel_parser(pxml_event_level: dict, datasets_dict: dict) -> str:
 
     def build_expression(dataset_map: dict) -> str:
         datasets = list(dataset_map.keys())
-        expr = f"{datasets[0]}"
-        for ds in range(1, len(datasets)):
-            left_key = dataset_map.get(datasets[ds])
-            right_key = dataset_map.get(datasets[ds - 1])
+        expr = f"datasets_dict['{datasets[0]}']['dataframe']"
+        for i in range(1, len(datasets)):
+            left_ds = datasets[i]
+            right_ds = datasets[i - 1]
+            left_key = dataset_map.get(left_ds)
+            right_key = dataset_map.get(right_ds)
             expr += (
-                f".join({datasets[ds]}, left_on={left_key}, right_on={right_key}, "
-                f"coalesce=True, suffix='_' + {datasets[ds]})"
+                f".join(datasets_dict['{left_ds}']['dataframe'], "
+                f"left_on={left_key}, right_on={right_key}, "
+                f"coalesce=True, suffix='_' + '{left_ds}')"
             )
         return expr
 
