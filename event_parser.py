@@ -1,87 +1,59 @@
-import polars as pl
 import re
-import xmltodict
-import warnings
+from typing import List, Dict
 
-warnings.filterwarnings("ignore")
+class UtilsEventLevelParser:
+    def __init__(self, pxml_event_level: dict, datasets_dict: dict):
+        self.pxml_event_level = pxml_event_level
+        self.datasets_dict = datasets_dict
 
-def event_level_parser(pxml_event_level: dict, datasets_dict: dict) -> dict:
-    columns = pxml_event_level.get("RetainedColumns").get("Column")
-    return event_level(pxml_event_level, datasets_dict)
+    def extract_dataset(self, event_columns: List[str]) -> Dict[str, List[str]]:
+        dataset_map = {}
+        for item in event_columns:
+            ds, col = item.split(":", maxsplit=1)
+            keys = self.datasets_dict.get(ds, {}).get("joining_keys", [])
+            dataset_map.setdefault(ds, keys)
+        return dataset_map
 
-def extract_dataset(event_columns: list[str], datasets_dict: dict):
-    dataset_map = {}
-    for item in event_columns:
-        ds, col = item.split('.', maxsplit=1)
-        keys = datasets_dict.get(ds).get("joining_keys")
-        dataset_map.setdefault(ds, keys)
-    return dataset_map
+    def extract_ds_columns(self, dataset_map: str) -> Dict[str, set]:
+        # Only match ds-prefixed dataset references like ds1.colX
+        pattern = r'\b(ds\d+)\.(\w+)\b'
+        matches = re.findall(pattern, dataset_map)
+        selective_dataset = {}
+        for ds, col in matches:
+            selective_dataset.setdefault(ds, set()).add(col)
+        return selective_dataset
 
-def extract_ds_columns(dataset_map: str):
-    # Only match ds-prefixed dataset references like ds1.colX
-    pattern = r'\b(ds\d+)\.(\w+)\b'
-    matches = re.findall(pattern, dataset_map)
-    selective_dataset = {}
-    for ds, col in matches:
-        selective_dataset.setdefault(ds, set()).add(col)
-    return selective_dataset
+    def build_expression(self, dataset_map: dict) -> str:
+        datasets = list(dataset_map.keys())
+        expr = f"{datasets[0]}"
+        for ds in range(1, len(datasets)):
+            left_key = dataset_map.get(datasets[ds])
+            right_key = dataset_map.get(datasets[ds - 1])
+            expr += f".join({datasets[ds]}, left_on={left_key}, " \
+                    f"right_on={right_key}, coalesce=True, suffix='_' + {datasets[ds]})"
+        return expr
 
-def build_expression(dataset_map):
-    datasets = list(dataset_map.keys())
-    expr = f"{datasets[0]}"
-    for ds in datasets[0:]:
-        print(ds)
-        on = dataset_map.get(ds)
-        expr += f".join({ds}, left_on={dataset_map.get(ds)}, " \
-                f"right_on={dataset_map.get(ds + 1)}, " \
-                f"coalesce=True, suffix = {'_' + ds} ')"
-    return expr
+    def parse(self) -> str:
+        columns = self.pxml_event_level.get("RetainedColumns", {}).get("Column", [])
+        dataset_map = self.extract_dataset(columns)
+        expression = self.build_expression(dataset_map)
+        return expression
 
-def event_level(pxml_event_level, datasets_dict):
-    # Extract required information from XML
-    columns = pxml_event_level.get("RetainedColumns").get("Column")
+
+def event_level(pxml_event_level: dict, datasets_dict: dict):
+    # Prepare the parser
+    parser = UtilsEventLevelParser(pxml_event_level, datasets_dict)
     
-    # Extract dataset information
-    dataset_map = extract_dataset(columns, datasets_dict)
+    # Generate the expression string
+    join_expression = parser.parse()
     
-    # Build expression for joining datasets
-    expression = build_expression(dataset_map)
-    
-    # Execute the expression (you might need to implement this part)
-    # This would involve actually performing the join operations
-    
-    # For demonstration, just return the expression
-    return {
-        "expression": expression,
-        "datasets": dataset_map
-    }
-
-# If running as main script
-if __name__ == "__main__":
-    # Load XML file
-    with open("C:/Users/h59257/Downloads/rule_2.xml", 'r', encoding="utf-8") as file:
-        xml_data = file.read()
-    
-    # Define datasets dictionary
-    datasets_dict = {
-        "ds1": {
-            "joining_keys": "[account_key]",
-            "dataframe": pl.read_csv("C:/Users/h59257/Downloads/ds1_sgp.csv")
-        },
-        "ds2": {
-            "joining_keys": "[account_id]",
-            "dataframe": pl.read_csv("C:/Users/h59257/Downloads/profiles_sgp.csv")
-        },
-        "ds3": {
-            "joining_keys": "[account_id]",
-            "dataframe": pl.read_csv("C:/Users/h59257/Downloads/profiles_sgp.csv")
-        }
+    # Prepare evaluation context with actual DataFrames
+    eval_context = {
+        ds_name: datasets_dict[ds_name]["dataframe"]
+        for ds_name in datasets_dict
     }
     
-    # Parse XML
-    xml_dict = xmltodict.parse(xml_data)
-    pxml_event_level = xml_dict.get("Rule").get("EventLevel")
+    # Evaluate the join expression
+    result_df = eval(join_expression, {}, eval_context)
     
-    # Get result
-    result = event_level(pxml_event_level, datasets_dict)
-    print(result)
+    return result_df
