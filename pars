@@ -77,20 +77,19 @@ JOIN
 
 
 def build_column_selection_expression(columns: List[str]) -> str:
-        select_expr_parts = []
+        select_exprs = []
         for col in columns:
             ds, col_name = col.split(":", maxsplit=1)
-            # Handles both col and col_ds
-            select_expr_parts.append(f'"{col_name}" if "{col_name}" in joined_df.columns '
-                                     f'else "{col_name}_{ds}"')
-        final_expr = "joined_df[[{}]]".format(", ".join(select_expr_parts))
-        return final_expr
+            expr = (
+                f"pl.col('{col_name}') if '{col_name}' in joined_df.columns "
+                f"else pl.col('{col_name}_{ds}')"
+            )
+            select_exprs.append(expr)
+        return f".select([\n    {',\n    '.join(select_exprs)}\n])"
 
-    # Step 1: Extract columns
     columns = pxml_event_level.get("RetainedColumns", {}).get("Column", [])
     dataset_map = extract_dataset(columns)
 
-    # Step 2: Build expressions
     join_expr = build_join_expression(dataset_map)
     col_select_expr = build_column_selection_expression(columns)
 
