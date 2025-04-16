@@ -1,75 +1,33 @@
-import cx_Oracle
-from collections import defaultdict
-import json
+def retrieve_data(self, query, max_per_page=200000):
+    if self.pool_conn:
+        with self.conn.acquire() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(query)
+                columns = [col[0] for col in cursor.description]
+                res = pl.DataFrame(schema=columns)
 
-# Type casting function
-def cast_value(value, value_type):
-    if value is None:
-        return None
-    try:
-        if value_type.lower() == 'integer':
-            return int(value)
-        elif value_type.lower() == 'float':
-            return float(value)
-        elif value_type.lower() == 'boolean':
-            return value.lower() == 'true'
-        else:  # Default to string
-            return str(value)
-    except Exception:
-        # If something goes wrong, keep it as a string
-        return value
+                while True:
+                    rows = cursor.fetchmany(max_per_page)
+                    if not rows:
+                        break
+                    res = pl.concat(
+                        items=[res, pl.DataFrame(rows, schema=columns)],
+                        how="vertical"
+                    )
+                connection.commit()
+                return res
+    else:
+        self.cur.execute(query)
+        columns = [col[0] for col in self.cur.description]
+        res = pl.DataFrame(schema=columns)
 
-# Connect to Oracle DB
-conn = cx_Oracle.connect(user="your_user", password="your_password", dsn="your_dsn")
-cursor = conn.cursor()
-
-# SQL query including VALUE_TYPE
-query = """
-SELECT 
-    tm.TSHLD_SET_NAME,
-    th.TSHLD_TYPE,
-    th.TSHLD_NAME,
-    th.THSLD_VALUE,
-    th.VALUE_TYPE
-FROM 
-    THRESHOLD_MASTER tm
-JOIN 
-    THRESHOLD_SET ts 
-    ON tm.TSHLD_SET_TEMPLATE_ID = ts.TSHLD_SET_TEMPLATE_ID
-JOIN 
-    THRESHOLDS th 
-    ON ts.TSHLD_SET_ID = th.TSHLD_SET_ID
-"""
-
-cursor.execute(query)
-
-# Fetch rows and column headers
-rows = cursor.fetchall()
-columns = [col[0] for col in cursor.description]
-
-# Index mapping
-set_name_idx = columns.index("TSHLD_SET_NAME")
-type_idx = columns.index("TSHLD_TYPE")
-name_idx = columns.index("TSHLD_NAME")
-value_idx = columns.index("THSLD_VALUE")
-value_type_idx = columns.index("VALUE_TYPE")
-
-# Nested dictionary
-static_threshold = defaultdict(lambda: defaultdict(dict))
-
-# Populate dictionary with type casting
-for row in rows:
-    set_name = row[set_name_idx]
-    tshld_type = row[type_idx]
-    tshld_name = row[name_idx]
-    value_raw = row[value_idx]
-    value_type = row[value_type_idx]
-
-    casted_value = cast_value(value_raw, value_type)
-    static_threshold[set_name][tshld_type][tshld_name] = casted_value
-
-# Convert to regular dict
-static_threshold = json.loads(json.dumps(static_threshold))
-
-# Done
-print(static_threshold)
+        while True:
+            rows = self.cur.fetchmany(max_per_page)
+            if not rows:
+                break
+            res = pl.concat(
+                items=[res, pl.DataFrame(rows, schema=columns)],
+                how="vertical"
+            )
+        self.conn.commit()
+        return res
