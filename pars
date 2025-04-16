@@ -73,3 +73,21 @@ JOIN
         static_threshold[set_name][tshld_type][tshld_name] = casted_value
 
     return json.loads(json.dumps(static_threshold))  # Convert to regular dict for JSON use
+
+
+
+def build_column_selection(columns: List[str], joined_columns: List[str]) -> List[str]:
+        selected = []
+        for item in columns:
+            ds, col = item.split(":", maxsplit=1)
+            if col in joined_columns:
+                selected.append(col)
+            elif f"{col}_{ds}" in joined_columns:
+                selected.append(f"{col}_{ds}")
+        return selected
+
+    columns = pxml_event_level.get("RetainedColumns", {}).get("Column", [])
+    dataset_map = extract_dataset(columns, datasets_dict)
+    join_expr = build_expression(dataset_map)
+
+    return join_expr, columns
