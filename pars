@@ -1,33 +1,66 @@
-def retrieve_data(self, query, max_per_page=200000):
-    if self.pool_conn:
-        with self.conn.acquire() as connection:
-            with connection.cursor() as cursor:
-                cursor.execute(query)
-                columns = [col[0] for col in cursor.description]
-                res = pl.DataFrame(schema=columns)
+from collections import defaultdict
+import json
 
-                while True:
-                    rows = cursor.fetchmany(max_per_page)
-                    if not rows:
-                        break
-                    res = pl.concat(
-                        items=[res, pl.DataFrame(rows, schema=columns)],
-                        how="vertical"
-                    )
-                connection.commit()
-                return res
-    else:
-        self.cur.execute(query)
-        columns = [col[0] for col in self.cur.description]
-        res = pl.DataFrame(schema=columns)
+# Type casting function
+def cast_value(value, value_type):
+    if value is None:
+        return None
+    try:
+        if value_type.lower() == 'integer':
+            return int(value)
+        elif value_type.lower() == 'float':
+            return float(value)
+        elif value_type.lower() == 'boolean':
+            return value.lower() == 'true'
+        else:  # Default to string
+            return str(value)
+    except Exception:
+        return value
 
-        while True:
-            rows = self.cur.fetchmany(max_per_page)
-            if not rows:
-                break
-            res = pl.concat(
-                items=[res, pl.DataFrame(rows, schema=columns)],
-                how="vertical"
-            )
-        self.conn.commit()
-        return res
+def build_static_threshold(db_conn):
+    query = """
+    SELECT 
+        tm.TSHLD_SET_NAME,
+        th.TSHLD_TYPE,
+        th.TSHLD_NAME,
+        th.THSLD_VALUE,
+        th.VALUE_TYPE
+    FROM 
+        THRESHOLDS_MASTER tm
+    JOIN 
+        THRESHOLD_SET ts 
+        ON tm.TSHLD_SET_TEMPLATE_ID = ts.TSHLD_SET_TEMPLATE_ID
+    JOIN 
+        THRESHOLDS th 
+        ON ts.TSHLD_SET_ID = th.TSHLD_SET_ID
+    """
+
+    # Execute using your db_conn, results are assumed to be accessible via a cursor-like object
+    result = db_conn.execute_query(query)
+
+    # Fetch from cursor depending on internal logic — let's assume you are modifying `execute_query` to return fetched results
+    # If not, you may need to wrap `execute_query` or extend `db_conn` to expose `.cursor` results
+    cursor = db_conn.cur if not db_conn.pool_conn else db_conn.conn.acquire().__enter__().cursor()
+    rows = cursor.fetchall()
+    columns = [desc[0] for desc in cursor.description]
+
+    # Column indexes
+    set_name_idx = columns.index("TSHLD_SET_NAME")
+    type_idx = columns.index("TSHLD_TYPE")
+    name_idx = columns.index("TSHLD_NAME")
+    value_idx = columns.index("THSLD_VALUE")
+    value_type_idx = columns.index("VALUE_TYPE")
+
+    # Build dictionary
+    static_threshold = defaultdict(lambda: defaultdict(dict))
+    for row in rows:
+        set_name = row[set_name_idx]
+        tshld_type = row[type_idx]
+        tshld_name = row[name_idx]
+        value_raw = row[value_idx]
+        value_type = row[value_type_idx]
+
+        casted_value = cast_value(value_raw, value_type)
+        static_threshold[set_name][tshld_type][tshld_name] = casted_value
+
+    return json.loads(json.dumps(static_threshold))
