@@ -85,7 +85,8 @@ def build_column_selection_expression(columns: List[str]) -> str:
                 f"else pl.col('{col_name}_{ds}')"
             )
             select_exprs.append(expr)
-        return f".select([\n    {',\n    '.join(select_exprs)}\n])"
+        inner_expr = ", ".join(select_exprs)
+        return f".select([{inner_expr}])"
 
     columns = pxml_event_level.get("RetainedColumns", {}).get("Column", [])
     dataset_map = extract_dataset(columns)
