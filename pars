@@ -19,19 +19,23 @@ def cast_value(value, value_type):
 def build_static_threshold(db_conn):
     query = """
     SELECT 
-        tm.TSHLD_SET_NAME,
-        th.TSHLD_TYPE,
-        th.TSHLD_NAME,
-        th.THSLD_VALUE,
-        th.VALUE_TYPE
-    FROM 
-        THRESHOLDS_MASTER tm
-    JOIN 
-        THRESHOLD_SET ts 
-        ON tm.TSHLD_SET_TEMPLATE_ID = ts.TSHLD_SET_TEMPLATE_ID
-    JOIN 
-        THRESHOLDS th 
-        ON ts.TSHLD_SET_ID = th.TSHLD_SET_ID
+    tm.TSHLD_SET_NAME,
+    th.TSHLD_TYPE,
+    th.TSHLD_NAME,
+    th.THSLD_VALUE,
+    th.VALUE_TYPE,
+    th.TSHLD_ID,
+    th.TSHLD_SET_ID,
+    (CAST(th.TSHLD_ID AS VARCHAR(100)) || '_' || CAST(th.TSHLD_SET_ID AS VARCHAR(100))) AS COMPOSITE_KEY
+FROM 
+    THRESHOLDS_MASTER tm
+JOIN 
+    THRESHOLD_SET ts 
+    ON tm.TSHLD_SET_TEMPLATE_ID = ts.TSHLD_SET_TEMPLATE_ID
+JOIN 
+    THRESHOLDS th 
+    ON ts.TSHLD_SET_ID = th.TSHLD_SET_ID
+
     """
 
     # Execute the query using your existing mechanism
