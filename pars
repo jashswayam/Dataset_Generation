@@ -95,3 +95,6 @@ def build_column_selection_expression(columns: List[str]) -> str:
     col_select_expr = build_column_selection_expression(columns)
 
     return join_expr, col_select_expr
+
+
+pl.struct({k: pl.lit(v) for k, v in my_dict.items()})
