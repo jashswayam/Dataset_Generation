@@ -99,3 +99,23 @@ def build_column_selection_expression(columns: List[str]) -> str:
 
 def dict_to_struct_expr(d: dict):
     return pl.struct({k: pl.lit(v) for k, v in d.items()})
+
+
+import polars as pl
+from collections import defaultdict
+import json
+
+def build_static_threshold_from_df(df: pl.DataFrame):
+    static_threshold = defaultdict(lambda: defaultdict(dict))
+
+    for row in df.iter_rows(named=True):
+        set_name = row["TSHLD_SET_NAME"]
+        tshld_type = row["TSHLD_TYPE"]
+        tshld_name = row["TSHLD_NAME"]
+        value_raw = row["THSLD_VALUE"]
+        value_type = row["VALUE_TYPE"]
+
+        casted_value = cast_value(value_raw, value_type)
+        static_threshold[set_name][tshld_type][tshld_name] = casted_value
+
+    return json.loads(json.dumps(static_threshold))
