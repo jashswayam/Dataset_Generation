@@ -119,3 +119,21 @@ def build_static_threshold_from_df(df: pl.DataFrame):
         static_threshold[set_name][tshld_type][tshld_name] = casted_value
 
     return json.loads(json.dumps(static_threshold))
+
+
+import polars as pl
+import random
+
+# Random seed for reproducibility
+random.seed(42)
+
+# Reference lists for testing
+animals_ref = ["cat", "dog", "lion", "tiger", "wolf"]
+tags_ref = ["ml", "ai", "cv", "nlp", "robotics"]
+
+# Generate sample data
+n = 1000
+df = pl.DataFrame({
+    "animal": [random.choice(animals_ref + ["elephant", "bear", "fox"]) for _ in range(n)],
+    "tags": [random.sample(tags_ref + ["math", "bio", "chem", "astro"], k=random.randint(0, 5)) for _ in range(n)]
+})
