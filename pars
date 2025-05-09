@@ -137,3 +137,22 @@ df = pl.DataFrame({
     "animal": [random.choice(animals_ref + ["elephant", "bear", "fox"]) for _ in range(n)],
     "tags": [random.sample(tags_ref + ["math", "bio", "chem", "astro"], k=random.randint(0, 5)) for _ in range(n)]
 })
+
+
+import os
+
+def load_sql_queries_from_qstore(folder_path="Qstore"):
+    sql_dict = {}
+    
+    if not os.path.exists(folder_path):
+        raise FileNotFoundError(f"The folder '{folder_path}' does not exist.")
+    
+    for file_name in os.listdir(folder_path):
+        if file_name.endswith(".sql"):
+            file_path = os.path.join(folder_path, file_name)
+            with open(file_path, "r", encoding="utf-8") as f:
+                sql_content = f.read()
+                key = os.path.splitext(file_name)[0]  # Remove the .sql extension
+                sql_dict[key] = sql_content
+    
+    return sql_dict
