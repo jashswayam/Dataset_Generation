@@ -156,3 +156,28 @@ def load_sql_queries_from_qstore(folder_path="Qstore"):
                 sql_dict[key] = sql_content
     
     return sql_dict
+
+
+@staticmethod
+def list_in_list(
+    expr1: Expr, 
+    expr2: str | Expr, 
+    separator1: str = ',', 
+    separator2: str = ',', 
+    **kwargs
+) -> bool:
+    validate_kwargs(Extendedoperator.list_in_list, **kwargs)
+
+    # Always split expr1 into a list, even if it's a single value
+    expr1_split = expr1.str.split(separator1)
+
+    if isinstance(expr2, str):
+        expr2_list = expr2.split(separator2)
+        return expr1_split.list.set_difference(expr2_list).list.len() == 0
+
+    elif isinstance(expr2, Expr):
+        expr2_split = expr2.str.split(separator2)
+        return expr1_split.list.set_difference(expr2_split).list.len() == 0
+
+    else:
+        raise ValueError('These Datatype of Column is Not allowed in list_in_list Operation')
