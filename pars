@@ -208,16 +208,26 @@ def list_not_in_list(
 
 import polars as pl
 
-# Your custom function, assume it's already defined in Extendedoperator
-# Extendedoperator.list_not_in_list(...) is defined as discussed earlier
-
-# Sample LazyFrame with test data
 df = pl.DataFrame({
-    "expr1": ["USD/EUR,INR/JPY,USD/INR", "USD/JPY,EUR/INR"],
-    "expr2": ["EUR/USD,INR/JPY,USD/INR", "EUR/USD,INR/USD"]
+    "expr1": [
+        "USD/EUR,INR/JPY,USD/INR,GBP/CAD,NZD/AUD,CHF/SEK",  # full match with reordering
+        "EUR/GBP,SGD/USD,USD/INR,EUR/CHF",                  # partial match
+        "USD/JPY,USD/EUR,JPY/INR,CAD/NZD",                  # no match
+        " USD/EUR , INR/JPY , USD/INR ",                    # same as row 1 but extra spaces
+        "USD/EUR,USD/EUR,USD/EUR",                          # repeated identical pairs
+        "USD/EUR,EUR/INR,GBP/CHF,CAD/JPY,NZD/AUD,SGD/HKD"   # completely mismatched
+    ],
+    "expr2": [
+        "EUR/USD,JPY/INR,INR/USD,CAD/GBP,AUD/NZD,SEK/CHF",  # all match
+        "SGD/USD,USD/INR,CHF/EUR",                          # partial match
+        "EUR/CHF,GBP/INR,NZD/JPY",                          # no match
+        "EUR/USD,JPY/INR,INR/USD",                          # all match (ignore spacing)
+        "EUR/USD",                                          # not all repeated match
+        "AUD/USD,CHF/USD,EUR/GBP,USD/JPY,GBP/AUD"           # none match
+    ]
 }).lazy()
 
-# Apply the list_not_in_list operation as a new column
+# Apply the function
 result = df.with_columns([
     Extendedoperator.list_not_in_list(
         expr1=pl.col("expr1"),
