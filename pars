@@ -202,3 +202,27 @@ def list_not_in_list(
 
     else:
         raise ValueError('These Datatype of Column is Not allowed in list_not_in_list Operation')
+
+
+
+
+import polars as pl
+
+# Your custom function, assume it's already defined in Extendedoperator
+# Extendedoperator.list_not_in_list(...) is defined as discussed earlier
+
+# Sample LazyFrame with test data
+df = pl.DataFrame({
+    "expr1": ["USD/EUR,INR/JPY,USD/INR", "USD/JPY,EUR/INR"],
+    "expr2": ["EUR/USD,INR/JPY,USD/INR", "EUR/USD,INR/USD"]
+}).lazy()
+
+# Apply the list_not_in_list operation as a new column
+result = df.with_columns([
+    Extendedoperator.list_not_in_list(
+        expr1=pl.col("expr1"),
+        expr2=pl.col("expr2"),
+        separator=",",
+        delimiter="/"
+    ).alias("mismatch")
+])
