@@ -236,3 +236,31 @@ result = df.with_columns([
         delimiter="/"
     ).alias("mismatch")
 ])
+
+
+import re
+from typing import List
+
+def normalize_list_string(
+    input_string: str,
+    separator: str = ',',               # primary separator
+    pair_delimiter: str = '/',         # delimiter between currency parts
+    **kwargs,
+) -> List[str]:
+    # Collect all separators: primary + others from kwargs
+    all_separators = [re.escape(separator)]
+    for key in sorted(kwargs):
+        if key.startswith("separator") and key != "separator":
+            all_separators.append(re.escape(kwargs[key]))
+
+    # Build regex split pattern
+    split_pattern = f"[{''.join(all_separators)}]"
+
+    # Remove whitespace, split by any separator, normalize each pair
+    tokens = re.split(split_pattern, re.sub(r"\s+", "", input_string))
+
+    # Sort each currency pair's parts and return the normalized list
+    return [
+        pair_delimiter.join(sorted(token.split(pair_delimiter)))
+        for token in tokens if token
+    ]
