@@ -271,4 +271,4 @@ def normalize_list_string_expr(
     )
 
 
-Assigned to develop a scalable Python framework for anti-money laundering detection, which enables flexible parameterized rule creation across various levels of business (LOBs), tenants, and regions with minimal effort and time. It utilizes optimized data processing techniques to enhance efficiency.
+Assigned to develop a scalable Python framework for Anti-Money Laundering (AML) detection, enabling dynamic, parameterized rule creation using context-driven XML configurations. Designed for seamless reuse across tenants, regions, and lines of business (LOBs), the framework leverages Polars for high-performance data processing, significantly reducing latency and manual effort while supporting flexible, multi-tenant scalability with minimal configuration overhead.
