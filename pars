@@ -269,3 +269,6 @@ def normalize_list_string_expr(
             .list.join(pair_delimiter)    # Re-join as normalized string
         )
     )
+
+
+Assigned to develop a scalable Python framework for anti-money laundering detection, which enables flexible parameterized rule creation across various levels of business (LOBs), tenants, and regions with minimal effort and time. It utilizes optimized data processing techniques to enhance efficiency.
