@@ -1,97 +1,59 @@
 import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
+from tensorflow.keras import layers, Model
 
-# -----------------------------
-# Config
-# -----------------------------
-input_dim = 25
-latent_dim = 8
+# --- Sampling Layer ---
+class Sampling(layers.Layer):
+    def call(self, inputs):
+        z_mean, z_log_var = inputs
+        epsilon = tf.random.normal(shape=tf.shape(z_mean))
+        return z_mean + tf.exp(0.5 * z_log_var) * epsilon
 
-# -----------------------------
-# Encoder
-# -----------------------------
-inputs = keras.Input(shape=(input_dim,), name="encoder_input")
-x = layers.Dense(32, activation="relu")(inputs)
-x = layers.Dense(16, activation="relu")(x)
+# --- Encoder ---
+latent_dim = 2
 
+encoder_inputs = tf.keras.Input(shape=(28, 28, 1))
+x = layers.Flatten()(encoder_inputs)
+x = layers.Dense(64, activation='relu')(x)
 z_mean = layers.Dense(latent_dim, name="z_mean")(x)
 z_log_var = layers.Dense(latent_dim, name="z_log_var")(x)
+z = Sampling()([z_mean, z_log_var])
+encoder = Model(encoder_inputs, [z_mean, z_log_var, z], name="encoder")
 
-# Sampling layer
-def sampling(args):
-    z_mean, z_log_var = args
-    epsilon = tf.random.normal(shape=tf.shape(z_mean))
-    return z_mean + tf.exp(0.5 * z_log_var) * epsilon
+# --- Decoder ---
+latent_inputs = tf.keras.Input(shape=(latent_dim,))
+x = layers.Dense(64, activation='relu')(latent_inputs)
+x = layers.Dense(28 * 28, activation='sigmoid')(x)
+decoder_outputs = layers.Reshape((28, 28, 1))(x)
+decoder = Model(latent_inputs, decoder_outputs, name="decoder")
 
-z = layers.Lambda(sampling, name="z")([z_mean, z_log_var])
-encoder = keras.Model(inputs, [z_mean, z_log_var, z], name="encoder")
-encoder.summary()
-
-# -----------------------------
-# Decoder
-# -----------------------------
-latent_inputs = keras.Input(shape=(latent_dim,), name="z_sampling")
-x = layers.Dense(16, activation="relu")(latent_inputs)
-x = layers.Dense(32, activation="relu")(x)
-outputs = layers.Dense(input_dim, activation="sigmoid")(x)
-
-decoder = keras.Model(latent_inputs, outputs, name="decoder")
-decoder.summary()
-
-# -----------------------------
-# VAE Model
-# -----------------------------
-class VAE(keras.Model):
+# --- VAE ---
+class VAE(Model):
     def __init__(self, encoder, decoder, **kwargs):
         super(VAE, self).__init__(**kwargs)
         self.encoder = encoder
         self.decoder = decoder
 
-    def compile(self, optimizer):
-        super(VAE, self).compile()
-        self.optimizer = optimizer
-        self.total_loss_tracker = keras.metrics.Mean(name="total_loss")
-        self.reconstruction_loss_tracker = keras.metrics.Mean(name="reconstruction_loss")
-        self.kl_loss_tracker = keras.metrics.Mean(name="kl_loss")
+    def call(self, inputs):
+        z_mean, z_log_var, z = self.encoder(inputs)
+        reconstructed = self.decoder(z)
+        # Store for loss calculation
+        self.kl_loss = -0.5 * tf.reduce_mean(
+            1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var)
+        )
+        return reconstructed
 
-    @property
-    def metrics(self):
-        return [self.total_loss_tracker, self.reconstruction_loss_tracker, self.kl_loss_tracker]
+# --- Custom loss wrapper ---
+def vae_loss_fn(x, x_reconstructed, kl_loss):
+    reconstruction_loss = tf.reduce_mean(
+        tf.keras.losses.binary_crossentropy(x, x_reconstructed)
+    )
+    total_loss = reconstruction_loss + kl_loss
+    return total_loss
 
-    def train_step(self, data):
-        if isinstance(data, tuple):
-            data = data[0]
-        with tf.GradientTape() as tape:
-            z_mean, z_log_var, z = self.encoder(data)
-            reconstruction = self.decoder(z)
-            reconstruction_loss = tf.reduce_mean(
-                tf.reduce_sum(keras.losses.mse(data, reconstruction), axis=1)
-            )
-            kl_loss = -0.5 * tf.reduce_mean(
-                tf.reduce_sum(1 + z_log_var - tf.square(z_mean) - tf.exp(z_log_var), axis=1)
-            )
-            total_loss = reconstruction_loss + kl_loss
-        grads = tape.gradient(total_loss, self.trainable_weights)
-        self.optimizer.apply_gradients(zip(grads, self.trainable_weights))
-        self.total_loss_tracker.update_state(total_loss)
-        self.reconstruction_loss_tracker.update_state(reconstruction_loss)
-        self.kl_loss_tracker.update_state(kl_loss)
-        return {
-            "loss": self.total_loss_tracker.result(),
-            "reconstruction_loss": self.reconstruction_loss_tracker.result(),
-            "kl_loss": self.kl_loss_tracker.result(),
-        }
-
-# -----------------------------
-# Build and Train
-# -----------------------------
 vae = VAE(encoder, decoder)
-vae.compile(optimizer=keras.optimizers.Adam())
+vae.compile(optimizer='adam', loss=lambda x, x_rec: vae_loss_fn(x, x_rec, vae.kl_loss))
 
-# Dummy example data (replace with your dataset)
+# --- Train on dummy data (MNIST-like) ---
 import numpy as np
-X_train = np.random.rand(1000, input_dim).astype("float32")
-X_val = np.random.rand(200, input_dim).astype("float32")
-
-history = vae.fit(X_train, epochs=30, batch_size=32, validation_data=(X_val, None))
+x_train = np.random.rand(1000, 28, 28, 1).astype("float32")
+vae.fit(x_train, x_train, epochs=3, batch_size=32)
