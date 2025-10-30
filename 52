@@ -1,0 +1,145 @@
+🧱 Updated Design Goals
+
+Each feature class still declares its required_columns (logical names).
+
+The orchestrator passes a dictionary of mappings, one per feature class.
+
+feature_column_mappings = {
+    TotalCredits3D: {"account": "acct_id", "date": "txn_date", "type": "transaction_type", "amount": "txn_amt"},
+    TotalCredits7D: {"account": "acct_id", "date": "txn_date", "trx_type": "transaction_type", "amount": "txn_amt"}
+}
+
+
+The orchestrator uses the correct mapping for each feature when instantiating it.
+
+⚙️ Updated base_feature.py
+
+We make no assumptions about global mappings now — each feature gets its own mapping.
+
+# base_feature.py
+from abc import ABC, abstractmethod
+import pandas as pd
+
+class Feature(ABC):
+    feature_name = None
+    required_columns = []  # logical names expected by feature
+
+    def __init__(self, data: pd.DataFrame, column_mapping: dict):
+        """
+        data: pd.DataFrame -> subset of actual data with all columns needed for this feature.
+        column_mapping: dict -> mapping from feature's logical column names to actual data column names.
+        """
+        # Rename actual columns → logical names
+        reverse_map = {v: k for k, v in column_mapping.items()}
+        # Keep only those actual columns that are present in data
+        rename_cols = {actual: reverse_map[actual] for actual in reverse_map if actual in data.columns}
+        self.data = data.rename(columns=rename_cols)
+
+    def __call__(self):
+        result = self.compute()
+        if not isinstance(result, pd.DataFrame):
+            raise ValueError("Feature output must be a pandas DataFrame")
+        return result
+
+    @abstractmethod
+    def compute(self):
+        pass
+
+    # ✅ Common reusable helper
+    @staticmethod
+    def aggregate_credits(transactions: pd.DataFrame, days: int) -> pd.DataFrame:
+        filtered = transactions[
+            (transactions['type'] == 'credit') &
+            (transactions['date'] >= transactions['date'].max() - pd.Timedelta(days=days))
+        ]
+        return (
+            filtered.groupby('account')['amount']
+            .sum()
+            .reset_index()
+            .rename(columns={'amount': f'total_credits_{days}d'})
+        )
+
+🧮 Example Features
+total_credits_3d.py
+from features.base_feature import Feature
+
+class TotalCredits3D(Feature):
+    feature_name = "total_credits_3d"
+    required_columns = ['account', 'date', 'type', 'amount']
+
+    def compute(self):
+        return self.aggregate_credits(self.data, days=3)
+
+total_credits_7d.py
+from features.base_feature import Feature
+
+class TotalCredits7D(Feature):
+    feature_name = "total_credits_7d"
+    required_columns = ['account', 'date', 'trx_type', 'amount']
+
+    def compute(self):
+        # In this feature, logic expects 'trx_type' column (not 'type')
+        # So we just rename it internally for consistency with helper
+        self.data = self.data.rename(columns={'trx_type': 'type'})
+        return self.aggregate_credits(self.data, days=7)
+
+🚀 Updated main.py
+
+Here’s the revised orchestrator:
+
+Takes a dictionary of feature → mapping.
+
+Dynamically selects the required subset of data for each feature based on its mapping.
+
+import pandas as pd
+from features.total_credits_3d import TotalCredits3D
+from features.total_credits_7d import TotalCredits7D
+
+def generate_features(transactions, feature_mappings):
+    df_final = pd.DataFrame({'account': []})
+
+    for feature_cls, col_map in feature_mappings.items():
+        # Compute actual column list based on this feature's mapping
+        actual_cols = list(col_map.values())
+        subset = transactions[actual_cols]
+
+        feature_obj = feature_cls(subset, col_map)
+        feature_df = feature_obj()  # executes __call__()
+
+        # On first iteration, initialize df_final properly
+        if df_final.empty:
+            df_final = feature_df
+        else:
+            df_final = pd.merge(df_final, feature_df, on='account', how='outer')
+
+    return df_final
+
+
+if __name__ == "__main__":
+    # Example input data
+    data = {
+        'acct_id': ['A', 'A', 'B', 'B', 'C'],
+        'txn_date': pd.to_datetime(['2025-10-28', '2025-10-29', '2025-10-30', '2025-10-27', '2025-10-30']),
+        'transaction_type': ['credit', 'credit', 'credit', 'debit', 'credit'],
+        'txn_amt': [100, 200, 150, 50, 300],
+    }
+    transactions = pd.DataFrame(data)
+
+    # Feature-specific column mappings
+    feature_mappings = {
+        TotalCredits3D: {
+            "account": "acct_id",
+            "date": "txn_date",
+            "type": "transaction_type",
+            "amount": "txn_amt",
+        },
+        TotalCredits7D: {
+            "account": "acct_id",
+            "date": "txn_date",
+            "trx_type": "transaction_type",
+            "amount": "txn_amt",
+        },
+    }
+
+    feature_df = generate_features(transactions, feature_mappings)
+    print(feature_df)
