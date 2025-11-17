@@ -1,145 +1,21 @@
-🧱 Updated Design Goals
-
-Each feature class still declares its required_columns (logical names).
-
-The orchestrator passes a dictionary of mappings, one per feature class.
-
-feature_column_mappings = {
-    TotalCredits3D: {"account": "acct_id", "date": "txn_date", "type": "transaction_type", "amount": "txn_amt"},
-    TotalCredits7D: {"account": "acct_id", "date": "txn_date", "trx_type": "transaction_type", "amount": "txn_amt"}
-}
-
-
-The orchestrator uses the correct mapping for each feature when instantiating it.
-
-⚙️ Updated base_feature.py
-
-We make no assumptions about global mappings now — each feature gets its own mapping.
-
-# base_feature.py
-from abc import ABC, abstractmethod
-import pandas as pd
-
-class Feature(ABC):
-    feature_name = None
-    required_columns = []  # logical names expected by feature
-
-    def __init__(self, data: pd.DataFrame, column_mapping: dict):
-        """
-        data: pd.DataFrame -> subset of actual data with all columns needed for this feature.
-        column_mapping: dict -> mapping from feature's logical column names to actual data column names.
-        """
-        # Rename actual columns → logical names
-        reverse_map = {v: k for k, v in column_mapping.items()}
-        # Keep only those actual columns that are present in data
-        rename_cols = {actual: reverse_map[actual] for actual in reverse_map if actual in data.columns}
-        self.data = data.rename(columns=rename_cols)
-
-    def __call__(self):
-        result = self.compute()
-        if not isinstance(result, pd.DataFrame):
-            raise ValueError("Feature output must be a pandas DataFrame")
-        return result
-
-    @abstractmethod
-    def compute(self):
-        pass
-
-    # ✅ Common reusable helper
-    @staticmethod
-    def aggregate_credits(transactions: pd.DataFrame, days: int) -> pd.DataFrame:
-        filtered = transactions[
-            (transactions['type'] == 'credit') &
-            (transactions['date'] >= transactions['date'].max() - pd.Timedelta(days=days))
-        ]
-        return (
-            filtered.groupby('account')['amount']
-            .sum()
-            .reset_index()
-            .rename(columns={'amount': f'total_credits_{days}d'})
-        )
-
-🧮 Example Features
-total_credits_3d.py
-from features.base_feature import Feature
-
-class TotalCredits3D(Feature):
-    feature_name = "total_credits_3d"
-    required_columns = ['account', 'date', 'type', 'amount']
-
-    def compute(self):
-        return self.aggregate_credits(self.data, days=3)
-
-total_credits_7d.py
-from features.base_feature import Feature
-
-class TotalCredits7D(Feature):
-    feature_name = "total_credits_7d"
-    required_columns = ['account', 'date', 'trx_type', 'amount']
-
-    def compute(self):
-        # In this feature, logic expects 'trx_type' column (not 'type')
-        # So we just rename it internally for consistency with helper
-        self.data = self.data.rename(columns={'trx_type': 'type'})
-        return self.aggregate_credits(self.data, days=7)
-
-🚀 Updated main.py
-
-Here’s the revised orchestrator:
-
-Takes a dictionary of feature → mapping.
-
-Dynamically selects the required subset of data for each feature based on its mapping.
-
-import pandas as pd
-from features.total_credits_3d import TotalCredits3D
-from features.total_credits_7d import TotalCredits7D
-
-def generate_features(transactions, feature_mappings):
-    df_final = pd.DataFrame({'account': []})
-
-    for feature_cls, col_map in feature_mappings.items():
-        # Compute actual column list based on this feature's mapping
-        actual_cols = list(col_map.values())
-        subset = transactions[actual_cols]
-
-        feature_obj = feature_cls(subset, col_map)
-        feature_df = feature_obj()  # executes __call__()
-
-        # On first iteration, initialize df_final properly
-        if df_final.empty:
-            df_final = feature_df
-        else:
-            df_final = pd.merge(df_final, feature_df, on='account', how='outer')
-
-    return df_final
-
-
-if __name__ == "__main__":
-    # Example input data
-    data = {
-        'acct_id': ['A', 'A', 'B', 'B', 'C'],
-        'txn_date': pd.to_datetime(['2025-10-28', '2025-10-29', '2025-10-30', '2025-10-27', '2025-10-30']),
-        'transaction_type': ['credit', 'credit', 'credit', 'debit', 'credit'],
-        'txn_amt': [100, 200, 150, 50, 300],
-    }
-    transactions = pd.DataFrame(data)
-
-    # Feature-specific column mappings
-    feature_mappings = {
-        TotalCredits3D: {
-            "account": "acct_id",
-            "date": "txn_date",
-            "type": "transaction_type",
-            "amount": "txn_amt",
-        },
-        TotalCredits7D: {
-            "account": "acct_id",
-            "date": "txn_date",
-            "trx_type": "transaction_type",
-            "amount": "txn_amt",
-        },
-    }
-
-    feature_df = generate_features(transactions, feature_mappings)
-    print(feature_df)
+Feature Name,Business Meaning / Layman Explanation,Why This Feature Matters (Impact on Anomaly),Category / Feature Group,Data Used (Inputs),Logical Formula (Human-Friendly),Technical Formula,Calculation Window,Expected Normal Pattern,What Counts as Anomaly,Example Scenario,VAE Role,Sensitivity Level,Data Quality Dependencies,Notes / Assumptions
+Total Credits 3D Value,Total credit amount aggregated over 3 days,Detects sudden increase in incoming credits,Transaction Volume,Transaction Amounts,Summarize all credits for the last 3 days,sum(credit_amount),3 Days,Stable or gradual change,Large spikes of incoming credit,Customer suddenly receives large payments,Input to reconstruction error,Medium,Needs clean timestamps,
+Total Credits 7D Value,Total credit amount aggregated over 7 days,Helps identify pattern shifts in cash inflow,Transaction Volume,Transaction Amounts,Summarize all credits for 7 days,sum(credit_amount),7 Days,Weekly pattern stable,Unusual weekly credit total,Fraudulent inflow pattern,Latent feature,Medium,Missing dates affect rolling window,
+Total Debits 3D Value,Total debit amount over 3 days,Detects burst of spending,Transaction Volume,Transaction Amounts,Summarize all debits for 3 days,sum(debit_amount),3 Days,Consistent pattern,Sudden high spending,Spender withdraws heavily,Reconstruction error,High,Outliers must be preserved,
+Total Debits 7D Value,Total debit amount over 7 days,Detects medium-term behavioral drift,Transaction Volume,Transaction Amounts,Summarize debits for 7 days,sum(debit_amount),7 Days,Smooth weekly expenses,Soaring week-level spending,Scammer empties account,Latent space compression,High,Needs complete weekly data,
+Cash Credits 3D Count,Number of cash credit transactions over 3 days,Shows cash deposit frequency,Bursting / Frequency,Transaction Count,Count number of cash credits,count(cash_credit),3 Days,Low frequency,Sharp rise in cash deposits,Money laundering attempt,VAE input,Low,Sensitive to classification accuracy,
+Cash Credits 7D Count,Number of cash credits in 7 days,Identifies weekly pattern,Bursting / Frequency,Transaction Count,Count weekly cash credits,count(cash_credit),7 Days,Stable weekly pattern,Abnormally high deposits,ATM cash loading anomaly,Latent feature,Low,Accurate tagging required,
+Cash Debits 3D Count,Number of cash withdrawals in 3 days,Shows unusual withdrawal behavior,Bursting / Frequency,Transaction Count,count cash debits,count(cash_debit),3 Days,Moderate frequency,High rapid withdrawals,Customer withdrawing repeatedly,Reconstruction error,High,ATM failures affect data,
+Cash Debits 7D Count,Withdrawals over 7 days,Detects weekly behavior shifts,Bursting / Frequency,Transaction Count,count cash debits,count(cash_debit),7 Days,Weekly stable,Sharp rise in withdrawals,Account compromise,Latent dimension,High,Missing values shift patterns,
+Rounded Amount Count,Count of transactions with rounded amounts,Detects fraud patterns based on rounded payments,Behavioral Pattern,Transaction Values,count rounded amounts,count(amount%100==0),Any,Sparse,High number of rounded amounts,Scammer using round numbers,Latent signal,Medium,Amount preprocessing needed,
+Rounded Amount Count Ratio,Ratio of rounded vs total transactions,Indicates suspicious structured behavior,Behavioral Pattern,Transaction Values,rounded_count / total_count,(rounded)/(total),Any,Low ratio,High ratio,Automated bot payments,VAE anomaly score contributor,Medium,Ensure denominator non-zero,
+HR Payments Value,High-risk payment total value,Detects large or suspicious recipients,Risk Category,Payment Amounts,sum(hr_payment),Any,Low for normal user,Spike in HR payments,Fraud transfer attempt,Latent feature,High,HR list must be accurate,
+HR Payments Volume,Number of HR payments,Detects behavior shifts in risk profile,Risk Category,Payment Count,count(hr_payment),Any,Rare,High counts,Multiple transfers to flagged accounts,Reconstruction error,High,Classification must be validated,
+HR Payments Volume Ratio,HR share of overall transactions,Shows risk concentration,Risk Category,Transactions,hr_count/total_count,(hr)/(total),Any,Near zero,High ratio,User suddenly interacts only with HR accounts,Latent compression,Medium,Check total count,
+TH Payments Value,Threshold-based flagged payment value,Identifies critical anomaly in amounts,Threshold Deviation,Transaction Values,sum(th_payment),Any,Stable,Rises sharply,Large unavoidable threshold breach,Reconstruction error,High,Threshold may vary,
+TH Payments Volume,Count of threshold-based flagged payments,Shows frequency of threshold crossings,Threshold Deviation,Transaction Count,count(th_payment),Any,Rare,Frequent threshold hits,Repeated large transactions,Latent behavior model,Medium,Dependent on business rule,
+TH Payments Volume Ratio,Ratio of threshold payments to total,Indicates abnormal risk share,Threshold Deviation,Transaction Count,th_count/total_count,(th)/(total),Any,Very low,High ratio,Persistent pattern of threshold hits,Latent VAE use,Medium,Need clean totals,
+Distinct Senders Count 3D,Unique senders in last 3 days,Detects unusual activity inflow,Diversity / Behavior,Transaction Meta,count distinct senders,unique(sender_id),3 Days,Stable number,High diversity suddenly,Account used as mule,Reconstruction error,High,Sender IDs must be accurate,
+Distinct Senders Count 7D,Unique senders in last 7 days,Shows weekly behavioral changes,Diversity / Behavior,Transaction Meta,unique sender count,unique(sender_id),7 Days,Low fluctuation,Large sudden rise,Multiple unknown people sending money,Latent vector,High,Data completeness required,
+Distinct Receivers Count 3D,Unique receivers in 3 days,Detects unusual outgoing patterns,Diversity / Behavior,Transaction Meta,unique(receiver_id),unique(receiver_id),3 Days,Stable,Large jump,User sends to many new recipients,Fraudulent scatter transfers,VAE anomaly signal,High,Receiver mapping needed,
+Distinct Receivers Count 7D,Unique receivers in 7 days,Shows weekly wide pattern,Diversity / Behavior,Transaction Meta,unique(receiver_id),unique(receiver_id),7 Days,Consistent,Unusual number of receivers,Scam transfer behavior,Latent representation,High,Requires non-null IDs
