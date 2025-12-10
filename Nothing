@@ -1,0 +1,16 @@
+import json
+
+json_output = json.dumps(
+    dict(
+        zip(
+            *df
+            .select(["Account", "ProcessingDate", pl.struct(feature_cols).alias("features")])
+            .group_by("Account")
+            .agg(pl.struct(["ProcessingDate", "features"]).alias("rows"))
+            .with_columns(pl.col("rows").apply(lambda rows: {r["ProcessingDate"]: r["features"].as_dict() for r in rows}).alias("by_date"))
+            .select(["Account", "by_date"])
+            .iter_columns()
+        )
+    ),
+    indent=4
+)
