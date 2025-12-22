@@ -1,21 +1,56 @@
-Feature Name,Business Meaning / Layman Explanation,Why This Feature Matters (Impact on Anomaly),Category / Feature Group,Data Used (Inputs),Logical Formula (Human-Friendly),Technical Formula,Calculation Window,Expected Normal Pattern,What Counts as Anomaly,Example Scenario,VAE Role,Sensitivity Level,Data Quality Dependencies,Notes / Assumptions
-Total Credits 3D Value,Total credit amount aggregated over 3 days,Detects sudden increase in incoming credits,Transaction Volume,Transaction Amounts,Summarize all credits for the last 3 days,sum(credit_amount),3 Days,Stable or gradual change,Large spikes of incoming credit,Customer suddenly receives large payments,Input to reconstruction error,Medium,Needs clean timestamps,
-Total Credits 7D Value,Total credit amount aggregated over 7 days,Helps identify pattern shifts in cash inflow,Transaction Volume,Transaction Amounts,Summarize all credits for 7 days,sum(credit_amount),7 Days,Weekly pattern stable,Unusual weekly credit total,Fraudulent inflow pattern,Latent feature,Medium,Missing dates affect rolling window,
-Total Debits 3D Value,Total debit amount over 3 days,Detects burst of spending,Transaction Volume,Transaction Amounts,Summarize all debits for 3 days,sum(debit_amount),3 Days,Consistent pattern,Sudden high spending,Spender withdraws heavily,Reconstruction error,High,Outliers must be preserved,
-Total Debits 7D Value,Total debit amount over 7 days,Detects medium-term behavioral drift,Transaction Volume,Transaction Amounts,Summarize debits for 7 days,sum(debit_amount),7 Days,Smooth weekly expenses,Soaring week-level spending,Scammer empties account,Latent space compression,High,Needs complete weekly data,
-Cash Credits 3D Count,Number of cash credit transactions over 3 days,Shows cash deposit frequency,Bursting / Frequency,Transaction Count,Count number of cash credits,count(cash_credit),3 Days,Low frequency,Sharp rise in cash deposits,Money laundering attempt,VAE input,Low,Sensitive to classification accuracy,
-Cash Credits 7D Count,Number of cash credits in 7 days,Identifies weekly pattern,Bursting / Frequency,Transaction Count,Count weekly cash credits,count(cash_credit),7 Days,Stable weekly pattern,Abnormally high deposits,ATM cash loading anomaly,Latent feature,Low,Accurate tagging required,
-Cash Debits 3D Count,Number of cash withdrawals in 3 days,Shows unusual withdrawal behavior,Bursting / Frequency,Transaction Count,count cash debits,count(cash_debit),3 Days,Moderate frequency,High rapid withdrawals,Customer withdrawing repeatedly,Reconstruction error,High,ATM failures affect data,
-Cash Debits 7D Count,Withdrawals over 7 days,Detects weekly behavior shifts,Bursting / Frequency,Transaction Count,count cash debits,count(cash_debit),7 Days,Weekly stable,Sharp rise in withdrawals,Account compromise,Latent dimension,High,Missing values shift patterns,
-Rounded Amount Count,Count of transactions with rounded amounts,Detects fraud patterns based on rounded payments,Behavioral Pattern,Transaction Values,count rounded amounts,count(amount%100==0),Any,Sparse,High number of rounded amounts,Scammer using round numbers,Latent signal,Medium,Amount preprocessing needed,
-Rounded Amount Count Ratio,Ratio of rounded vs total transactions,Indicates suspicious structured behavior,Behavioral Pattern,Transaction Values,rounded_count / total_count,(rounded)/(total),Any,Low ratio,High ratio,Automated bot payments,VAE anomaly score contributor,Medium,Ensure denominator non-zero,
-HR Payments Value,High-risk payment total value,Detects large or suspicious recipients,Risk Category,Payment Amounts,sum(hr_payment),Any,Low for normal user,Spike in HR payments,Fraud transfer attempt,Latent feature,High,HR list must be accurate,
-HR Payments Volume,Number of HR payments,Detects behavior shifts in risk profile,Risk Category,Payment Count,count(hr_payment),Any,Rare,High counts,Multiple transfers to flagged accounts,Reconstruction error,High,Classification must be validated,
-HR Payments Volume Ratio,HR share of overall transactions,Shows risk concentration,Risk Category,Transactions,hr_count/total_count,(hr)/(total),Any,Near zero,High ratio,User suddenly interacts only with HR accounts,Latent compression,Medium,Check total count,
-TH Payments Value,Threshold-based flagged payment value,Identifies critical anomaly in amounts,Threshold Deviation,Transaction Values,sum(th_payment),Any,Stable,Rises sharply,Large unavoidable threshold breach,Reconstruction error,High,Threshold may vary,
-TH Payments Volume,Count of threshold-based flagged payments,Shows frequency of threshold crossings,Threshold Deviation,Transaction Count,count(th_payment),Any,Rare,Frequent threshold hits,Repeated large transactions,Latent behavior model,Medium,Dependent on business rule,
-TH Payments Volume Ratio,Ratio of threshold payments to total,Indicates abnormal risk share,Threshold Deviation,Transaction Count,th_count/total_count,(th)/(total),Any,Very low,High ratio,Persistent pattern of threshold hits,Latent VAE use,Medium,Need clean totals,
-Distinct Senders Count 3D,Unique senders in last 3 days,Detects unusual activity inflow,Diversity / Behavior,Transaction Meta,count distinct senders,unique(sender_id),3 Days,Stable number,High diversity suddenly,Account used as mule,Reconstruction error,High,Sender IDs must be accurate,
-Distinct Senders Count 7D,Unique senders in last 7 days,Shows weekly behavioral changes,Diversity / Behavior,Transaction Meta,unique sender count,unique(sender_id),7 Days,Low fluctuation,Large sudden rise,Multiple unknown people sending money,Latent vector,High,Data completeness required,
-Distinct Receivers Count 3D,Unique receivers in 3 days,Detects unusual outgoing patterns,Diversity / Behavior,Transaction Meta,unique(receiver_id),unique(receiver_id),3 Days,Stable,Large jump,User sends to many new recipients,Fraudulent scatter transfers,VAE anomaly signal,High,Receiver mapping needed,
-Distinct Receivers Count 7D,Unique receivers in 7 days,Shows weekly wide pattern,Diversity / Behavior,Transaction Meta,unique(receiver_id),unique(receiver_id),7 Days,Consistent,Unusual number of receivers,Scam transfer behavior,Latent representation,High,Requires non-null IDs
+High-Level Objectives
+Establish a standardized way to define, compute, and consume AML features
+Separate raw transactional data from derived analytical intelligence
+Reduce heavy computation workloads through reusable intermediate feature layers
+Maintain strong regulatory audit readiness with traceable and explainable feature lineage
+Enable historical behavioral analysis to power predictive and advanced risk scoring
+Feature Categories (Feature Contracts / Policies)
+1️⃣ Atomic Features
+Definition & Role
+Atomic Features form the base truth layer of the Feature Factory. These features capture raw transactional attributes exactly as they occur in source systems without transformation. Each piece of transactional data is stored at the level of an individual transaction and acts as a permanent historical record.
+Embedded Characteristics
+Represent immutable transactional data (changed only in rare defect remediation cases)
+Stored in structured JSON key–value form for flexibility
+Serve as the foundational dataset from which all other features are derived
+Provide full transparency, audit traceability, and regulatory confidence
+Retention governed strictly by compliance policy
+Example Sub-Features Transaction amount, timestamp, transaction channel, location, currency, originating entity details, counterparty metadata.
+2️⃣ State Features
+Definition & Role
+State Features are derived, aggregated, and periodically updated features that summarize transactional behavior over defined time intervals and entity scopes. Their core purpose is computational efficiency—they reduce dependence on constantly scanning massive transaction volumes.
+Embedded Characteristics
+Represent rolled-up or progressive behavioral summaries (daily, weekly, monthly, rolling windows)
+Computed primarily at account or customer/entity level
+Continuously updated as new atomic transactions arrive
+Act as a “computational cache” enabling faster model execution
+Maintain linkage to atomic data to ensure explainability and audit traceability
+Example Sub-Features Daily transaction count per account, cumulative monthly transaction value, rolling velocity indicators, average transaction amounts, frequency distributions.
+3️⃣ Model Features
+Definition & Role
+Model Features are model-specific, dynamically generated feature sets computed on demand. They are constructed based on predefined model templates that specify exactly which indicators are required for a particular AML detection model.
+Embedded Characteristics
+Generated through an API request by a detection engine
+Primarily derived from State Features (and Atomic Features when required)
+Temporarily stored in S3 to support execution evidence and audit reproducibility
+Not intended for permanent database storage to avoid unnecessary data persistence
+Ensure that every model receives consistent, validated, and complete feature inputs
+Usage Machine learning risk models, rule engines, scenario execution, and case evidence generation.
+4️⃣ Pair Features (Focus + Counterparty Features)
+Definition & Role
+Pair Features capture relationship-based behavioral intelligence between a focal party (such as a customer, account, or entity) and its counterparties. Instead of viewing transactions individually, this feature set analyzes interaction patterns over time.
+Embedded Characteristics
+Represent longitudinal behavioral relationships and transaction dynamics
+Retained as long-term records due to their investigative and analytical value
+Used extensively for behavioral anomaly detection and contextual understanding
+Governed by multi-year retention policies to meet compliance and investigation needs
+Support UI visualization, enabling analysts to understand counterparty risk context
+Example Sub-Features Frequency of transactions between two entities, aggregate transferred volume between a pair, directional trends, dominant behavior patterns.
+5️⃣ Alert Features
+Definition & Role
+Alert Features store structured intelligence about alerts generated by AML detection mechanisms. They provide historical context for compliance, investigation, and predictive analytics.
+Embedded Characteristics
+Capture alert trigger details, underlying feature context, model or rule outcomes
+Stored for multi-year durations due to regulatory and operational necessity
+Enable case management systems to present full contextual histories
+Serve as key inputs into predictive scoring models and repeat-offense analysis
+Provide complete alert lineage supporting audit reviews and regulator scrutiny
