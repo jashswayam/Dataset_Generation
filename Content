@@ -1,0 +1,103 @@
+1. Problem Context & Need for Standardization
+	•	Multiple AML rules and ML models exist today
+	•	Inconsistent execution, data access, and output formats
+	•	Scattered deployments across servers and databases
+	•	Limited governance, scalability, and operational visibility
+
+⸻
+
+2. Model Factory as a Unified Execution Platform
+	•	A single umbrella platform for all AML detections
+	•	Supports both:
+	•	Rule-based detections
+	•	ML / AI-based models
+	•	Standardizes how detections are run, managed, and consumed
+
+⸻
+
+3. Core Design Principle: Decoupling Data & Execution
+	•	Model / rule logic is completely separated from data access
+	•	Same model or rule can run on different datasets
+	•	Enables reuse, flexibility, and faster onboarding of new detections
+
+⸻
+
+4. Job as the Fundamental Execution Unit
+	•	A Job combines:
+	•	A rule or a model
+	•	A dataset definition
+	•	A mapping template
+	•	Runtime parameters (including prod vs simulation)
+	•	Jobs can be triggered:
+	•	Ad hoc
+	•	In batch
+	•	Via UI or schedulers
+
+⸻
+
+5. Dataset Definition as a First-Class Entity
+	•	Defines how and from where data is fetched
+	•	Supports:
+	•	Feature Factory calls
+	•	Direct database or API access
+	•	Includes:
+	•	Connection details
+	•	Queries / payloads
+	•	List of exposed output columns
+
+⸻
+
+6. Mapping Layer Between Data & Logic
+	•	Models and rules use logical column names
+	•	Datasets expose physical column names
+	•	Mapping templates bind the two at execution time
+	•	Mapping is configurable via UI or job definition
+
+⸻
+
+7. Scalable Execution on Kubernetes
+	•	Dockerized execution running on Kubernetes
+	•	Two scalable pod types:
+	•	Rule execution pods (XML / Python rules)
+	•	Model execution pods (ML models)
+	•	Supports both vertical and horizontal scaling
+
+⸻
+
+8. Standardized Output & Storage Flexibility
+	•	All executions produce JSON output
+	•	Rule-based detections follow a common output schema
+	•	Outputs can be stored in:
+	•	Databases
+	•	Parquet files
+	•	Object storage (e.g., S3)
+
+⸻
+
+9. Model, Rule & Lifecycle Governance
+	•	Model Factory owns:
+	•	Registry
+	•	Versioning
+	•	Lineage
+	•	Lifecycle management
+	•	MLflow used for:
+	•	Model registry
+	•	Artifact storage
+	•	Version tracking
+	•	Metadata stored in DB for discoverability and audit
+
+⸻
+
+10. UI, Control & Observability (Parallel Capability)
+	•	UI provides:
+	•	Model & rule listing
+	•	Job definition and execution
+	•	Dataset and mapping configuration
+	•	Entitlement-based access control
+	•	Monitoring, logs, audit trails, and job observability
+
+⸻
+
+One-Line Executive Summary
+
+The Model Factory is a scalable, governed AML detection platform that standardizes execution, decouples data from logic, and provides end-to-end lifecycle management for both rules and ML models.
