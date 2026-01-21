@@ -1,0 +1,129 @@
+
+Rule Lifecycle in the Model Factory (End-to-End)
+
+ 
+
+In the Model Factory, rules are developed as governed Python modules, versioned and approved through source control, deployed via CI/CD without rebuilding execution images, and fully tracked through centralized metadata for audit-ready, scalable execution.
+
+ 
+
+1. Rule Development (Controlled Python Framework)
+
+A rule is developed as a Python file, but not as free-form code.
+It must extend predefined base classes, implement mandatory methods, and follow strict coding norms enforced by the Model Factory rule framework. This ensures every rule has a predictable structure, execution behaviour, and metadata footprint.
+
+2. Source Control & Review (Bitbucket / Git)
+
+The rule code is checked into a version-controlled repository such as Bitbucket.
+Standard SDLC practices apply: peer reviews, approvals, branch protection, and traceability. At this stage, the rule is treated as governed application code, not as a configuration or ad hoc script.
+
+3. CI/CD Validation & Packaging
+
+On merge or release, CI/CD pipelines are triggered.
+These pipelines automatically validate the rule by checking:
+
+Inheritance from the required base classes
+Presence of mandatory methods
+Code quality, security, and allowed imports
+Only rules that pass all validations are packaged as deployable artifacts.
+
+4. Controlled Deployment (Outside Docker Image)
+
+Validated rule artifacts are deployed to a runtime-accessible location outside the Docker image.
+The Docker image contains only the rule execution engine, not individual rules. This avoids frequent image rebuilds and allows safe, scalable onboarding of new rules.
+
+5. Metadata Registration & Versioning
+
+As part of deployment, the pipeline automatically writes entries into a rules metadata store.
+This includes the rule ID, immutable version, deployment timestamp, deployed-by details, ownership, and descriptive metadata. Each deployment creates a new version, ensuring full traceability and auditability.
+
+6. Execution via Jobs (Governed & Traceable)
+
+When a job is created or executed, it references a specific rule ID and version from the metadata store.
+At runtime, the rule engine dynamically loads the rule, executes it with the configured dataset and mappings, and produces standardized output—while maintaining execution logs and lineage.
+
+Model Lifecycle in the Model Factory (End-to-End)
+
+ 
+
+In the Model Factory, ML models are developed as governed Python workflows with trained model artifacts registered and versioned in MLflow, deployed via CI/CD without rebuilding execution images, and executed through jobs with full metadata, lineage, and auditability.
+
+ 
+
+1. Model Development (Code + Workflow Separation)
+
+A model is developed as two clearly separated components:
+
+Model workflow code (Python): handles data reading, transformations, feature preparation, scaling, normalization, and inference logic.
+Model artifact: the trained model itself (e.g., pickle, ONNX, or equivalent format).
+This separation ensures the execution logic is transparent and versioned, while the learned model remains an immutable artifact.
+
+2. Source Control for Model Code (Bitbucket / Git)
+
+All model workflow code is checked into Bitbucket as governed application code.
+This includes:
+
+Data preprocessing logic
+Feature transformations
+Inference pipeline
+Model interface and configuration
+Standard SDLC controls apply: reviews, approvals, and traceability.
+Model artifacts themselves are not stored in Git.
+
+3. Model Training & Experimentation
+
+Model training is executed in controlled environments (not necessarily inside the Model Factory runtime).
+During training:
+
+Data versions, parameters, and metrics are tracked
+Multiple experiments and iterations may be run
+The final selected model is prepared for registration
+This phase is iterative and exploratory by nature.
+
+4. MLflow Integration (Registry & Artifact Store)
+
+MLflow is used as the system of record for ML models:
+
+Trained model artifacts are logged and stored
+Model versions are registered
+Training parameters, metrics, and lineage are captured
+MLflow becomes the authoritative source for:
+
+Model artifact versioning
+Promotion across environments (e.g., staging → production)
+Model lifecycle state
+5. CI/CD-Based Model Deployment
+
+Once a model version is approved:
+
+CI/CD pipelines deploy the model workflow code (from Git)
+The pipeline links the workflow to a specific MLflow model version
+No Docker image rebuild is required
+The Model Factory runtime dynamically pulls the correct model artifact from MLflow at execution time.
+
+6. Model Metadata Registration
+
+As part of deployment, entries are written into a model metadata table.
+This captures:
+
+Model ID and version
+Linked MLflow run / model version
+Deployment timestamp and environment
+Deployed-by and ownership details
+Associated workflow code version
+This table acts as the bridge between MLflow and the Model Factory UI.
+
+7. Execution via Jobs (Governed & Reproducible)
+
+Jobs reference:
+
+A specific model ID
+A specific model version
+A dataset definition and mapping template
+At runtime:
+
+The workflow code executes
+Data is transformed
+The MLflow model artifact is loaded
+Inference is performed
+All executions are logged with full lineage for audit and analysis.
