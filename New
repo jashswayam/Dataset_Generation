@@ -1,0 +1,58 @@
+Feature Factory — Purpose
+	•	Centralized capability to define, compute, govern, and expose AML features across the platform.
+	•	Features include:
+	•	Raw attributes from transactional and KYC data
+	•	Aggregations and calculations (e.g., behavioral metrics, thresholds)
+	•	Risk factors and indicators
+	•	Rule-based derivations / red flags
+	•	Serves multiple consumers:
+	•	Model Factory (ML-based and rule-based detections)
+	•	Detection workflows
+	•	Investigation UI (feature display, red flags, risk context)
+
+⸻
+
+Recommended Positioning: Independent Capability
+	•	Feature Factory should be a standalone, shared service, not embedded in any single vertical.
+	•	Reasons:
+	•	Used by both detection and investigation
+	•	Needs independent lifecycle, ownership, and governance
+	•	Avoids duplication of feature logic across teams
+	•	Enables consistent feature definitions, explainability, and auditability
+	•	Acts as a common abstraction layer between:
+	•	Data layer (inputs)
+	•	Detection / Model Factory / Investigation (consumers)
+
+⸻
+
+Why NOT in the Data Layer
+	•	Data layer responsibility:
+	•	Ingestion, storage, normalization, basic transformations
+	•	Feature Factory responsibility:
+	•	Business and risk logic, aggregations, rule-based derivations
+	•	Putting Feature Factory in data layer would:
+	•	Mix domain logic with data engineering
+	•	Reduce flexibility to evolve features independently
+	•	Increase maintenance and governance complexity
+	•	Risk logic should not be embedded where raw data pipelines are managed.
+
+⸻
+
+Why NOT under Investigation
+	•	Investigation is a consumer, not a producer, of features.
+	•	Investigation focus:
+	•	Alert review, UI, case management, analyst decisioning
+	•	Placing Feature Factory here would:
+	•	Create upstream dependency on a downstream process
+	•	Limit reuse for detection and model execution
+	•	Misalign ownership (feature computation vs. UI workflows)
+
+⸻
+
+Summary (Executive View)
+	•	Feature Factory = horizontal, reusable capability
+	•	Sits between data and consumption layers
+	•	Ensures:
+	•	Single source of truth for features
+	•	Consistent usage across detection and investigation
+	•	Better governance, scalability, and regulatory explainability
