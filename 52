@@ -4,7 +4,7 @@
 	•	Experience building Python microservices and APIs, using FastAPI, Flask, or Django, with async IO, Celery, Dockerization, and orchestration using Kubernetes.
 	•	Strong delivery, CI/CD, and MLOps experience, including Git and Bitbucket workflows, MLflow or equivalent tools, and managing models from experimentation to production.
 	•	Working knowledge of cloud and distributed systems, including AWS, Azure, or Google Cloud, messaging and streaming platforms such as Kafka or RabbitMQ, and diverse data stores.
-	•	Strong collaboration and learning mindset, with the ability to work across teams and geographies, adapt to new technologies, mentor others, and take end-to-end ownership.  ———————————————————————————————————————————————————————————————————————————————
+	•	Strong collaboration and learning mindset, with the ability to work across teams and geographies, adapt to new technologies, mentor others, and take end-to-end ownership.  
 
 Lead and evolve the end-to-end technical architecture for AML platforms, including Python services, microservices, ML/AI components, data pipelines, asynchronous RESTful and GraphQL APIs, containerized using Docker and orchestrated with Kubernetes in cloud environments.
 	•	Design and deliver production-ready Python solutions for large-scale AML systems, handling high-volume transactional data with focus on performance, scalability, security, and regulatory compliance.
