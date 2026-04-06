@@ -6,17 +6,18 @@ WITH date_bounds AS (
     FROM dual
 )
 SELECT
-    TO_CHAR(f.execution_local_date_time, 'YYYY-MM') AS duration,
-    SUBSTR(f.account_key, 1, 7) AS feed,
+    TO_CHAR(month_dt, 'YYYY-MM') AS duration,
+    feed,
     COUNT(*) AS cnt
-FROM aml_udm_cds_sam.v_trade f
-JOIN date_bounds d
-    ON f.execution_local_date_time >= d.start_dt
-   AND f.execution_local_date_time < d.end_dt + 1
-WHERE f.tenant_cd IN ('GMJPN', 'GMTWN', 'GMHKG')
-GROUP BY
-    TRUNC(f.execution_local_date_time, 'MM'),
-    SUBSTR(f.account_key, 1, 7)
-ORDER BY
-    duration,
-    feed;
+FROM (
+    SELECT
+        TRUNC(f.execution_local_date_time, 'MM') AS month_dt,
+        SUBSTR(f.account_key, 1, 7) AS feed
+    FROM aml_udm_cds_sam.v_trade f
+    JOIN date_bounds d
+        ON f.execution_local_date_time >= d.start_dt
+       AND f.execution_local_date_time < d.end_dt + 1
+    WHERE f.tenant_cd IN ('GMJPN', 'GMTWN', 'GMHKG')
+)
+GROUP BY month_dt, feed
+ORDER BY duration, feed;
