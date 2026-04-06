@@ -1,0 +1,22 @@
+WITH date_bounds AS (
+    SELECT 
+        TRUNC(TO_DATE(:processing_date, 'YYYY-MM-DD'), 'MM') AS month_start,
+        ADD_MONTHS(TRUNC(TO_DATE(:processing_date, 'YYYY-MM-DD'), 'MM'), -1) AS start_dt,
+        LAST_DAY(TRUNC(TO_DATE(:processing_date, 'YYYY-MM-DD'), 'MM')) AS end_dt
+    FROM dual
+)
+SELECT
+    TO_CHAR(f.execution_local_date_time, 'YYYY-MM') AS duration,
+    SUBSTR(f.account_key, 1, 7) AS feed,
+    COUNT(*) AS cnt
+FROM aml_udm_cds_sam.v_trade f
+JOIN date_bounds d
+    ON f.execution_local_date_time >= d.start_dt
+   AND f.execution_local_date_time < d.end_dt + 1
+WHERE f.tenant_cd IN ('GMJPN', 'GMTWN', 'GMHKG')
+GROUP BY
+    TRUNC(f.execution_local_date_time, 'MM'),
+    SUBSTR(f.account_key, 1, 7)
+ORDER BY
+    duration,
+    feed;
