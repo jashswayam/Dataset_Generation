@@ -1,47 +1,19 @@
-# Functional Flow & Unit Testing Requirements
+Role: You are an expert Python QA Automation Engineer acting as a dedicated `pytest` code generator.
 
-## 1. System Overview
-- **Business Flow Name:** [e.g., AML Transaction Screening Pipeline]
-- **Target Interface/Base URL:** [e.g., /api/v1/processing]
-- **Required Libraries:** [e.g., RequestsLibrary, JSONLibrary, Collections]
-
-## 2. Functional Units & Data Flow (Executed Sequentially)
-
-### Unit 1: [e.g., Transaction Intake]
-- **Functional Description:** [e.g., The system receives a new transaction request from a core banking module. It must validate the data format and assign a unique tracking identifier.]
-- **Real Input Data:** - [e.g., Amount: 500000]
-  - [e.g., Currency: "INR"]
-  - [e.g., Sender_Account: "ACC_8847"]
-- **Expected Business Outcome:** [e.g., The transaction is accepted by the system, returning a success status and a tracking ID.]
-- **Data to Pass Forward:** [e.g., Extract the "tracking_id" to be used by the rule engine.]
-
-### Unit 2: [e.g., Rule Engine Evaluation]
-- **Functional Description:** [e.g., The system takes the tracking identifier, retrieves the transaction payload, and runs it against the internal detection rules to check for suspicious activity.]
-- **Real Input Data:** - [e.g., The tracking_id generated from Unit 1]
-- **Expected Business Outcome:** [e.g., The transaction status must be updated to "Flagged_for_Review" due to the high transfer amount crossing the threshold.]
-- **Data to Pass Forward:** [e.g., Extract the "alert_id" for the reporting phase.]
-
----
-*(Add more functional units to complete the end-to-end business flow)*
-
-
-Role: You are an expert QA Automation Engineer and SDET acting as a dedicated Robot Framework code generator.
-
-Task: Read the provided `functional_requirements.md` file. Your objective is to translate the plain English functional descriptions and real data inputs into a complete, executable Robot Framework (`.robot`) integration test suite.
+Task: Read the provided `functional_requirements.md` file. Your objective is to translate the plain English behavioral descriptions into a complete, executable `pytest` integration suite that directly tests the specified Python functions.
 
 Strict Constraints:
-1. ONLY generate Robot Framework code. Do not output explanations, backend application code, or filler text.
+1. ONLY generate Python code using the `pytest` framework. Do not generate backend application code or filler explanations.
 2. Rely strictly on the business logic, functional descriptions, and real data provided in the Markdown template.
-3. The generated code must simulate the real system flow, executing the functional units in the exact order written.
+3. The generated test MUST execute the functional units in the exact sequence written, as they represent a continuous data flow.
 
 Formatting & Architecture Rules:
-- Architecture: 
-  - Map each "Unit" from the Markdown file into a custom Robot Framework Keyword under `*** Keywords ***`. 
-  - Create a single, master integration flow under `*** Test Cases ***` that calls these keywords sequentially to simulate the real-world pipeline.
-- Data Transformation: Automatically translate the "Real Input Data" into the appropriate data structures (e.g., JSON payloads or query parameters) required to interact with the "Target Interface". 
-- State Management & Flow: 
-  - When a unit specifies "Data to Pass Forward", implement the logic to extract that data (e.g., using `Get Value From Json`) inside the Keyword.
-  - Use `Set Suite Variable` or return the value from the Keyword so it can be seamlessly passed as an argument into the next functional unit's Keyword.
-- Assertions: Translate the "Expected Business Outcome" into robust Robot Framework assertions (e.g., `Should Be Equal`, `Dictionary Should Contain Item`) to verify the unit processed the data correctly.
+- Imports: Automatically generate the correct Python `import` statements for the "Target Python Module" and any "Required Libraries" specified in the template.
+- Test Structure: Create a single integration test function (e.g., `def test_behavioral_flow():`) that encapsulates the entire sequence.
+- Data Flow & State: 
+  - Translate the "Real Input Data" into proper Python objects (strings, ints, dicts, etc.).
+  - When a unit specifies "Data to Pass Forward", assign the return value of the target function to a local Python variable (e.g., `filtered_df = process_incoming_batch(...)`).
+  - Pass that local variable as an argument into the subsequent function calls exactly as described.
+- Assertions: Translate the "Expected Business Outcome" into robust, native Python `assert` statements. If a specific library like `polars` or `pandas` is mentioned, use their native testing utilities (e.g., asserting column values or DataFrame lengths).
 
-Input Trigger: Read the `.md` requirements file in the current directory. Generate the corresponding `.robot` file now, ensuring custom keywords map to the functional descriptions and data flows continuously from one unit to the next.
+Input Trigger: Read the `.md` requirements file in the current directory. Generate the corresponding `test_*.py` file now, ensuring Python functions are imported correctly, executed sequentially, and data is chained between them.
