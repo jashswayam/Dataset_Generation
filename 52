@@ -1,19 +1,22 @@
-Role: You are an expert Python QA Automation Engineer acting as a dedicated `pytest` code generator.
-
-Task: Read the provided `functional_requirements.md` file. Your objective is to translate the plain English behavioral descriptions into a complete, executable `pytest` integration suite that directly tests the specified Python functions.
-
-Strict Constraints:
-1. ONLY generate Python code using the `pytest` framework. Do not generate backend application code or filler explanations.
-2. Rely strictly on the business logic, functional descriptions, and real data provided in the Markdown template.
-3. The generated test MUST execute the functional units in the exact sequence written, as they represent a continuous data flow.
-
-Formatting & Architecture Rules:
-- Imports: Automatically generate the correct Python `import` statements for the "Target Python Module" and any "Required Libraries" specified in the template.
-- Test Structure: Create a single integration test function (e.g., `def test_behavioral_flow():`) that encapsulates the entire sequence.
-- Data Flow & State: 
-  - Translate the "Real Input Data" into proper Python objects (strings, ints, dicts, etc.).
-  - When a unit specifies "Data to Pass Forward", assign the return value of the target function to a local Python variable (e.g., `filtered_df = process_incoming_batch(...)`).
-  - Pass that local variable as an argument into the subsequent function calls exactly as described.
-- Assertions: Translate the "Expected Business Outcome" into robust, native Python `assert` statements. If a specific library like `polars` or `pandas` is mentioned, use their native testing utilities (e.g., asserting column values or DataFrame lengths).
-
-Input Trigger: Read the `.md` requirements file in the current directory. Generate the corresponding `test_*.py` file now, ensuring Python functions are imported correctly, executed sequentially, and data is chained between them.
+​1. Create the TOP "Umbrella" Box
+Create a new TOP box job (e.g., dummy_TOP_PATCHING_BOX). This will act as the single control point for the entire regional/silo workflow.
+​2. Nest ALL Relevant Jobs
+Add all existing Box jobs AND all standalone command jobs in that view into the TOP box. You do this by adding box_name: dummy_TOP_PATCHING_BOX to their respective JIL definitions.
+​3. Create the "Hold" Trigger (Job #1)
+Create a command job that will be used to freeze the workflow.
+​Action: This job executes an Autosys CLI command against the TOP box.
+​Command: sendevent -E JOB_ON_HOLD -J dummy_TOP_PATCHING_BOX
+​4. APS Initiates the "Drain" (Pre-Patching)
+Right before the patching window begins, the APS team manually triggers Job #1.
+​What happens: The TOP box goes to ON_HOLD. Any sub-jobs currently RUNNING will be allowed to finish naturally (draining the active tasks). Any sub-jobs waiting to start will be blocked from running.
+​5. The Server Readiness Checker (Job #2 - File Watcher)
+Create a File Watcher job looking for a specific file on the target server (e.g., /tmp/patching_complete.txt).
+​Why: This job will stay RUNNING (or ACTIVATED) while the server goes down and reboots. It will only go to SUCCESS when the infrastructure team touches that file, proving the server is up, the disk is mounted, and the Autosys Agent is actively listening.
+​6. Restart AIS Services (Job #3)
+Create your service restart job using your existing script (e.g., Restart_UDM_SAM_Services...).
+​Dependency: Set a condition so this job only runs after the File Watcher (Job #2) succeeds: condition: s(dummy_job_2_filewatcher)
+​7. Create the "Resume" Trigger (Job #4)
+Create a command job to lift the hold and wake the environment back up.
+​Dependency: Set a condition so this only runs after the services are restarted: condition: s(dummy_job_3_restart)
+​Command: sendevent -E JOB_OFF_HOLD -J dummy_TOP_PATCHING_BOX
+​What happens: The TOP box returns to active monitoring. Any jobs that were waiting in line will instantly transition to STARTING and the workflow resumes seamlessly.
