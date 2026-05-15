@@ -1,22 +1,38 @@
-​1. Create the TOP "Umbrella" Box
-Create a new TOP box job (e.g., dummy_TOP_PATCHING_BOX). This will act as the single control point for the entire regional/silo workflow.
-​2. Nest ALL Relevant Jobs
-Add all existing Box jobs AND all standalone command jobs in that view into the TOP box. You do this by adding box_name: dummy_TOP_PATCHING_BOX to their respective JIL definitions.
-​3. Create the "Hold" Trigger (Job #1)
-Create a command job that will be used to freeze the workflow.
-​Action: This job executes an Autosys CLI command against the TOP box.
-​Command: sendevent -E JOB_ON_HOLD -J dummy_TOP_PATCHING_BOX
-​4. APS Initiates the "Drain" (Pre-Patching)
-Right before the patching window begins, the APS team manually triggers Job #1.
-​What happens: The TOP box goes to ON_HOLD. Any sub-jobs currently RUNNING will be allowed to finish naturally (draining the active tasks). Any sub-jobs waiting to start will be blocked from running.
-​5. The Server Readiness Checker (Job #2 - File Watcher)
-Create a File Watcher job looking for a specific file on the target server (e.g., /tmp/patching_complete.txt).
-​Why: This job will stay RUNNING (or ACTIVATED) while the server goes down and reboots. It will only go to SUCCESS when the infrastructure team touches that file, proving the server is up, the disk is mounted, and the Autosys Agent is actively listening.
-​6. Restart AIS Services (Job #3)
-Create your service restart job using your existing script (e.g., Restart_UDM_SAM_Services...).
-​Dependency: Set a condition so this job only runs after the File Watcher (Job #2) succeeds: condition: s(dummy_job_2_filewatcher)
-​7. Create the "Resume" Trigger (Job #4)
-Create a command job to lift the hold and wake the environment back up.
-​Dependency: Set a condition so this only runs after the services are restarted: condition: s(dummy_job_3_restart)
-​Command: sendevent -E JOB_OFF_HOLD -J dummy_TOP_PATCHING_BOX
-​What happens: The TOP box returns to active monitoring. Any jobs that were waiting in line will instantly transition to STARTING and the workflow resumes seamlessly.
+Instead of one helper, you create two helper Command Jobs. They don't even need to be inside the Top Box; they can sit outside of it acting as remote controls.
+​1. The "Pause" Helper Job (JOB_PAUSE_TOPBOX)
+This job executes a script that finds all jobs inside your Top Box, looks for the ones in ACTIVATED (AC) or INACTIVE (IN) states, and puts them ON_HOLD.
+(Note: It is much safer to put them ON_HOLD rather than INACTIVE. If you force a time-dependent job back to INACTIVE, you risk stripping its time-check for that day. ON_HOLD safely freezes it where it is).
+​The script inside this job would look something like this:
+
+#!/bin/bash
+TOP_BOX="YOUR_TOP_BOX_NAME"
+
+# Find jobs in the box that are Activated (AC) or Inactive (IN)
+JOBS_TO_HOLD=$(autorep -j $TOP_BOX -d | awk '$6 == "AC" || $6 == "IN" {print $1}')
+
+# Loop through and put them on hold
+for job in $JOBS_TO_HOLD; do
+    sendevent -E ON_HOLD -J $job
+done
+
+# Finally, put the Top Box on hold
+sendevent -E ON_HOLD -J $TOP_BOX
+
+
+2. The "Resume" Helper Job (JOB_RESUME_TOPBOX)
+This job simply reverses the process.
+
+#!/bin/bash
+TOP_BOX="YOUR_TOP_BOX_NAME"
+
+# Find jobs in the box that are On Hold (OH)
+JOBS_TO_RESUME=$(autorep -j $TOP_BOX -d | awk '$6 == "OH" {print $1}')
+
+# Take the Top Box off hold first
+sendevent -E OFF_HOLD -J $TOP_BOX
+
+# Loop through and take children off hold
+for job in $JOBS_TO_RESUME; do
+    sendevent -E OFF_HOLD -J $job
+done
+
