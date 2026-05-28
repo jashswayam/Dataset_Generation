@@ -1,38 +1,55 @@
-Instead of one helper, you create two helper Command Jobs. They don't even need to be inside the Top Box; they can sit outside of it acting as remote controls.
-​1. The "Pause" Helper Job (JOB_PAUSE_TOPBOX)
-This job executes a script that finds all jobs inside your Top Box, looks for the ones in ACTIVATED (AC) or INACTIVE (IN) states, and puts them ON_HOLD.
-(Note: It is much safer to put them ON_HOLD rather than INACTIVE. If you force a time-dependent job back to INACTIVE, you risk stripping its time-check for that day. ON_HOLD safely freezes it where it is).
-​The script inside this job would look something like this:
+Step 1: Data Partitioning (The L1 Filter)
+Before touching any NLP libraries, you must isolate the exact target data.
 
-#!/bin/bash
-TOP_BOX="YOUR_TOP_BOX_NAME"
+Filter: Query your AML dataset strictly for alerts where Investigation_Level == 'L1' AND Status == 'Closed'.
 
-# Find jobs in the box that are Activated (AC) or Inactive (IN)
-JOBS_TO_HOLD=$(autorep -j $TOP_BOX -d | awk '$6 == "AC" || $6 == "IN" {print $1}')
+Partition: Split this filtered dataset into separate dataframes (or Polars partitions) grouped by Rule_ID or Rule_Name.
 
-# Loop through and put them on hold
-for job in $JOBS_TO_HOLD; do
-    sendevent -E ON_HOLD -J $job
-done
+Result: You now have independent datasets (e.g., one dataset of 5,000 closed L1 notes for the "Structuring" rule, another for the "Velocity" rule). You will run Steps 2-5 independently on each rule's dataset.
 
-# Finally, put the Top Box on hold
-sendevent -E ON_HOLD -J $TOP_BOX
+Step 2: Aggressive Preprocessing
+Apply this to the HTML notes within a specific rule's dataset.
 
+Strip all HTML tags using BeautifulSoup.
 
-2. The "Resume" Helper Job (JOB_RESUME_TOPBOX)
-This job simply reverses the process.
+Convert text to lowercase.
 
-#!/bin/bash
-TOP_BOX="YOUR_TOP_BOX_NAME"
+Apply your custom stop-word list (ensuring critical negations like "not" and "no" are kept).
 
-# Find jobs in the box that are On Hold (OH)
-JOBS_TO_RESUME=$(autorep -j $TOP_BOX -d | awk '$6 == "OH" {print $1}')
+Step 3: TF-IDF Vectorization
+Transform the cleaned text into numerical format.
 
-# Take the Top Box off hold first
-sendevent -E OFF_HOLD -J $TOP_BOX
+Fit a TfidfVectorizer on the rule's dataset.
 
-# Loop through and take children off hold
-for job in $JOBS_TO_RESUME; do
-    sendevent -E OFF_HOLD -J $job
-done
+Set max_df=0.85 (to strip out words the investigators use in almost every note for this specific rule).
 
+Set min_df=3 or 5 (to strip out unique typos or specific account numbers).
+
+Step 4: Dimensionality Reduction (LSA)
+Compress the sparse TF-IDF matrix into dense, meaningful topics.
+
+Pass the TF-IDF matrix through Scikit-learn's TruncatedSVD.
+
+Reduce the dimensions to a manageable number (e.g., 20 to 50 dimensions). This merges synonyms (like "salary" and "payroll") into mathematical vectors.
+
+Step 5: Density-Based Clustering
+Find the distinct "reasons" hidden in the math.
+
+Pass the reduced, 50-dimensional matrix into HDBSCAN.
+
+HDBSCAN will output cluster labels (e.g., Cluster 0, Cluster 1, Cluster 2, and Cluster -1 for unclusterable "noise").
+
+Result: Every L1 note for this rule is now mathematically assigned to a specific cluster representing a distinct reason for closure.
+
+Step 6: Topic Extraction and Rule Mapping (Where Rule Descriptions Come In)
+Translate the clusters into actionable business logic.
+
+Extract: For Cluster 0, find the top 5 words with the highest TF-IDF scores (e.g., "salary, slip, verified, hr, legitimate").
+
+Map: Place this next to the Rule Description.
+
+Rule Description: "High Value Cash Deposit."
+
+Cluster Words: "salary, slip, verified."
+
+Derived False Positive Reason: "Legitimate payroll deposits verified by HR documentation."
