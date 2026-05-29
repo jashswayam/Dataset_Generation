@@ -1,55 +1,196 @@
-Step 1: Data Partitioning (The L1 Filter)
-Before touching any NLP libraries, you must isolate the exact target data.
+# ==========================================
+# 1. SETUP & DEPENDENCY IMPORT
+# ==========================================
+import os
+import re
+import pandas as pd
+import numpy as np
+from bs4 import BeautifulSoup
 
-Filter: Query your AML dataset strictly for alerts where Investigation_Level == 'L1' AND Status == 'Closed'.
+# Vectorization and Machine Learning
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.decomposition import TruncatedSVD
+import hdbscan
 
-Partition: Split this filtered dataset into separate dataframes (or Polars partitions) grouped by Rule_ID or Rule_Name.
+# Disable warnings for clean notebook output
+import warnings
+warnings.filterwarnings('ignore')
 
-Result: You now have independent datasets (e.g., one dataset of 5,000 closed L1 notes for the "Structuring" rule, another for the "Velocity" rule). You will run Steps 2-5 independently on each rule's dataset.
+# ==========================================
+# 2. DATA LOADING & SCHEMA INSPECTION
+# ==========================================
+# Path to your parquet file/directory
+PARQUET_PATH = "path_to_your_segregated_data.parquet"
 
-Step 2: Aggressive Preprocessing
-Apply this to the HTML notes within a specific rule's dataset.
+print("--- Loading Data ---")
+df = pd.read_parquet(PARQUET_PATH)
 
-Strip all HTML tags using BeautifulSoup.
+print("\n--- Data Schema & Info ---")
+print(df.info())
 
-Convert text to lowercase.
+print("\n--- Data Preview (First 2 Rows) ---")
+print(df[['Rule_ID', 'alert_id', 'bunit_identifier']].head(2))
 
-Apply your custom stop-word list (ensuring critical negations like "not" and "no" are kept).
 
-Step 3: TF-IDF Vectorization
-Transform the cleaned text into numerical format.
+# ==========================================
+# 3. SURGICAL HTML PREPROCESSING
+# ==========================================
+def extract_blue_tag_content(html_content):
+    """
+    Parses the HTML note and extracts text specifically from the blue highlighted areas.
+    Modify the selector based on how your HTML identifies the blue tag 
+    (e.g., class name, inline style, or specific tag).
+    """
+    if pd.isna(html_content) or not isinstance(html_content, str):
+        return ""
+    
+    soup = BeautifulSoup(html_content, 'html.parser')
+    
+    # Target elements. Example assumes style contains 'background-color: blue' 
+    # or an internal section containing 'Party and Transaction analysis'
+    # Adjust this selector to match your DOM exactly.
+    blue_elements = soup.find_all(lambda tag: tag.name in ['div', 'span', 'td', 'th'] and 
+                                 (tag.get('class') == ['blue-highlight'] or 
+                                  'background-color: blue' in str(tag.get('style')) or
+                                  'blue' in str(tag.get('class'))))
+    
+    if blue_elements:
+        extracted_text = " ".join([elem.get_text(separator=" ", strip=True) for elem in blue_elements])
+        return extracted_text
+    
+    # Fallback: if specific blue target structural tag isn't hit, look by header text string
+    for header in soup.find_all(['b', 'strong', 'td']):
+        if "transaction analysis" in header.text.lower() or "conclusion" in header.text.lower():
+            next_node = header.next_sibling
+            if next_node:
+                return next_node.get_text(strip=True)
+                
+    # Final Fallback: Return stripped text if styling targets mismatch
+    return soup.get_text(separator=" ", strip=True)
 
-Fit a TfidfVectorizer on the rule's dataset.
 
-Set max_df=0.85 (to strip out words the investigators use in almost every note for this specific rule).
+def clean_text(text):
+    """
+    Standardizes text, preserves crucial negations, and sanitizes characters.
+    """
+    if not text:
+        return ""
+    text = text.lower()
+    # Replace newlines/tabs with space
+    text = re.sub(r'\s+', ' ', text)
+    # Remove alphanumeric system noises/hashes but preserve basic grammatical structures
+    text = re.sub(r'[^a-zA-Z\s\.\,\-\;]', '', text)
+    return text.strip()
 
-Set min_df=3 or 5 (to strip out unique typos or specific account numbers).
+print("\n--- Executing Surgical Preprocessing ---")
+# Apply parsing logic
+df['extracted_explanation'] = df['note'].apply(extract_blue_tag_content)
+df['cleaned_explanation'] = df['extracted_explanation'].apply(clean_text)
 
-Step 4: Dimensionality Reduction (LSA)
-Compress the sparse TF-IDF matrix into dense, meaningful topics.
+# Drop rows where the explanation block yielded no text content
+df = df[df['cleaned_explanation'] != ""].reset_index(drop=True)
+print(f"Total functional alerts ready for topic engineering: {len(df)}")
 
-Pass the TF-IDF matrix through Scikit-learn's TruncatedSVD.
 
-Reduce the dimensions to a manageable number (e.g., 20 to 50 dimensions). This merges synonyms (like "salary" and "payroll") into mathematical vectors.
+# ==========================================
+# 4. CUSTOM STOP-WORD FRAMEWORK
+# ==========================================
+from sklearn.feature_extraction import text
 
-Step 5: Density-Based Clustering
-Find the distinct "reasons" hidden in the math.
+# Load standard English stop words
+standard_stop_words = list(text.ENGLISH_STOP_WORDS)
 
-Pass the reduced, 50-dimensional matrix into HDBSCAN.
+# CRITICAL STRIP: Remove negation words so they are NOT ignored by the vectorizer
+negations_to_keep = {'no', 'not', 'nor', 'neither', 'none', 'nothing', 'never', 'without'}
+custom_stop_words = [word for word in standard_stop_words if word not in negations_to_keep]
 
-HDBSCAN will output cluster labels (e.g., Cluster 0, Cluster 1, Cluster 2, and Cluster -1 for unclusterable "noise").
+# Append corporate/domain-specific noise words that carry no descriptive value here
+domain_noise = ['alert', 'transaction', 'customer', 'account', 'party', 'reviewed', 'investigation', 'closed']
+custom_stop_words.extend(domain_noise)
 
-Result: Every L1 note for this rule is now mathematically assigned to a specific cluster representing a distinct reason for closure.
 
-Step 6: Topic Extraction and Rule Mapping (Where Rule Descriptions Come In)
-Translate the clusters into actionable business logic.
+# ==========================================
+# 5. VECTORIZATION & DIMENSIONALITY REDUCTION (LSA)
+# ==========================================
+print("\n--- Initializing Vectorizer (TF-IDF) ---")
+# max_df=0.85 automatically ignores words appearing in >85% of documents (dynamic noise removal)
+# min_df=3 ignores random typos or unique account IDs appearing fewer than 3 times
+vectorizer = TfidfVectorizer(stop_words=custom_stop_words, max_df=0.85, min_df=3, ngram_range=(1, 2))
+tfidf_matrix = vectorizer.fit_transform(df['cleaned_explanation'])
 
-Extract: For Cluster 0, find the top 5 words with the highest TF-IDF scores (e.g., "salary, slip, verified, hr, legitimate").
+print(f"TF-IDF Shape (Alerts, Unique Word Dimensions): {tfidf_matrix.shape}")
 
-Map: Place this next to the Rule Description.
+print("\n--- Compressing Features via LSA (TruncatedSVD) ---")
+# Reduce sparse dimensions down to a dense context space (typically 20-50 components is optimal)
+n_components = min(30, tfidf_matrix.shape[1] - 1) 
+svd = TruncatedSVD(n_components=n_components, random_state=42)
+lsa_matrix = svd.fit_transform(tfidf_matrix)
 
-Rule Description: "High Value Cash Deposit."
+print(f"Compressed Matrix Shape (Alerts, Latent Components): {lsa_matrix.shape}")
 
-Cluster Words: "salary, slip, verified."
 
-Derived False Positive Reason: "Legitimate payroll deposits verified by HR documentation."
+# ==========================================
+# 6. DENSITY-BASED CLUSTERING (HDBSCAN)
+# ==========================================
+print("\n--- Executing Clustering via HDBSCAN ---")
+# min_cluster_size: Minimum number of alerts needed to form a distinct topic
+# min_samples: Controls conservative grouping. Higher value = more items classified as noise (-1)
+clusterer = hdbscan.HDBSCAN(min_cluster_size=5, min_samples=2, metric='euclidean', prediction_data=True)
+df['Topic_Cluster'] = clusterer.fit_predict(lsa_matrix)
+
+print("Cluster Assignment Counts (Note: -1 represents unclassified noise):")
+print(df['Topic_Cluster'].value_counts())
+
+
+# ==========================================
+# 7. TOPIC ENGINEERING SUMMARY GENERATION
+# ==========================================
+def extract_top_words_per_cluster(vectorizer, tfidf_matrix, cluster_labels, top_n=5):
+    """
+    Identifies the most defining words for each discovered cluster using average TF-IDF weights.
+    """
+    vocab = np.array(vectorizer.get_feature_names_out())
+    unique_clusters = set(cluster_labels)
+    cluster_topics = {}
+    
+    for cluster in unique_clusters:
+        if cluster == -1:
+            cluster_topics[cluster] = "Unclassified Noise/Outliers"
+            continue
+            
+        # Locate indices belonging to the current cluster
+        row_indices = np.where(cluster_labels == cluster)[0]
+        # Calculate mean TF-IDF scores across those specific rows
+        mean_tfidf = np.asarray(tfidf_matrix[row_indices].mean(axis=0)).flatten()
+        # Sort in descending order
+        top_word_indices = mean_tfidf.argsort()[::-1][:top_n]
+        
+        cluster_topics[cluster] = ", ".join(vocab[top_word_indices])
+        
+    return cluster_topics
+
+# Map mathematical clusters to readable keywords
+topic_word_mapping = extract_top_words_per_cluster(vectorizer, tfidf_matrix, df['Topic_Cluster'].values)
+df['Derived_Topic_Keywords'] = df['Topic_Cluster'].map(topic_word_mapping)
+
+
+# ==========================================
+# 8. EXPORTING ANALYTICAL MASTER MATRIX
+# ==========================================
+# Keep clean metadata anchors along with your brand new engineered topics
+final_delivery_df = df[[
+    'Rule_ID', 
+    'alert_id', 
+    'alert_date', 
+    'bunit_identifier', 
+    'Topic_Cluster', 
+    'Derived_Topic_Keywords', 
+    'cleaned_explanation'
+]]
+
+print("\n--- Execution Complete. Final Schema View ---")
+print(final_delivery_df.head(5))
+
+# Exporting results locally for analysis or framework integration
+final_delivery_df.to_parquet("engineered_aml_topics_output.parquet")
+print("\nSuccessfully saved final processed file to 'engineered_aml_topics_output.parquet'")
