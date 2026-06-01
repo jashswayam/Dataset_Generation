@@ -1,9 +1,36 @@
-You are a senior Anti-Money Laundering (AML) Compliance Analyst and data extraction expert.
-​I am providing you with a text document where each distinct paragraph represents a unique mathematical cluster (bucket) of L1 investigation notes. These notes detail the reasons why specific alerts were closed as false positives.
-​Your objective is to analyze each paragraph individually. For every paragraph provided, you must extract:
-​Topic Name: A highly concise, 3-to-5 word business label that defines the core behavioral reason the alerts in this bucket were closed.
-​Description: A 1-to-2 sentence summary explaining the context, transaction pattern, or compliance justification for why this specific group of alerts was dismissed.
-​CRITICAL CONSTRAINTS:
-​Treat every paragraph as an entirely separate, unrelated bucket. Do not merge their contexts.
-​Ignore any residual system noise, typos, or disjointed grammar in the raw notes. Focus only on the compliance rationale.
-​You must output your final response strictly as a valid JSON array of objects, with no introductory or concluding text
+# Extract the vocabulary array from your fitted vectorizer
+feature_names = vectorizer.get_feature_names_out()
+
+llm_payload_records = []
+unique_clusters = [c for c in dedup_df['Topic_Cluster'].unique() if c != -1]
+
+for cluster_id in unique_clusters:
+    # 1. Isolate the row indices for this cluster
+    cluster_indices = dedup_df[dedup_df['Topic_Cluster'] == cluster_id].index.tolist()
+    
+    # 2. Extract the TF-IDF Signature (Top 7 Keywords)
+    # Average the TF-IDF scores across all notes in this specific cluster
+    cluster_tfidf_mean = np.asarray(tfidf_matrix[cluster_indices].mean(axis=0)).flatten()
+    top_keyword_indices = cluster_tfidf_mean.argsort()[::-1][:7] # Get top 7 words
+    cluster_keywords = [feature_names[idx] for idx in top_keyword_indices]
+    
+    # 3. Find the Medoid (The Single Closest Note)
+    cluster_vectors = lsa_matrix[cluster_indices]
+    cluster_centroid = cluster_vectors.mean(axis=0).reshape(1, -1)
+    similarities = cosine_similarity(cluster_vectors, cluster_centroid).flatten()
+    
+    # Extract ONLY the absolute #1 highest scoring note
+    best_local_index = similarities.argmax()
+    best_global_index = cluster_indices[best_local_index]
+    medoid_note = dedup_df.loc[best_global_index, 'cleaned_note']
+    
+    # 4. Construct the Hyper-Dense LLM Payload
+    combined_payload = (
+        f"Key Cluster Vocabulary: {', '.join(cluster_keywords)} | "
+        f"Primary Context Note: {medoid_note}"
+    )
+    
+    llm_payload_records.append({
+        "Bucket_ID": cluster_id,
+        "Payload_For_LLM": combined_payload
+    })
