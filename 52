@@ -1,45 +1,152 @@
-# Extract the vocabulary array from your fitted vectorizer
-feature_names = vectorizer.get_feature_names_out()
+# ==========================================
+# STAGE 1: DEPENDENCY INITIALIZATION
+# ==========================================
+import os
+import re
+import pandas as pd
+from bs4 import BeautifulSoup
+
+# The BERTopic Ecosystem
+from bertopic import BERTopic
+from umap import UMAP
+from hdbscan import HDBSCAN
+from sklearn.feature_extraction.text import CountVectorizer
+from sentence_transformers import SentenceTransformer
+
+import warnings
+warnings.filterwarnings('ignore')
+
+# ==========================================
+# STAGE 2: DATA INGESTION
+# ==========================================
+PARQUET_PATH = "your_300k_alerts.parquet"
+
+print("--- Step 1: Ingesting Parquet Data ---")
+df = pd.read_parquet(PARQUET_PATH, engine='pyarrow')
+print(f"Initial row count: {len(df):,}")
+
+# ==========================================
+# STAGE 3: DATA SANITIZATION & DEDUPLICATION
+# ==========================================
+print("\n--- Step 2: Executing Surgical HTML Cleaning ---")
+
+def extract_and_clean_blue_tag(html_content):
+    if pd.isna(html_content) or not isinstance(html_content, str): return ""
+    
+    soup = BeautifulSoup(html_content, 'html.parser')
+    blue_elements = soup.find_all(lambda tag: tag.name in ['div', 'span', 'td', 'th', 'p'] and 
+                                 ('background-color: blue' in str(tag.get('style')) or 'blue' in str(tag.get('class'))))
+    
+    if blue_elements:
+        text = " ".join([elem.get_text(separator=" ", strip=True) for elem in blue_elements])
+    else:
+        text = ""
+        for header in soup.find_all(['b', 'strong', 'td']):
+            if "analysis" in header.text.lower() or "conclusion" in header.text.lower():
+                next_node = header.next_sibling
+                if next_node: text = next_node.get_text(strip=True); break
+        if not text: text = soup.get_text(separator=" ", strip=True)
+            
+    text = text.lower()
+    
+    # THE FIX: Annihilate the 'note[number]' pattern leaking into your buckets
+    text = re.sub(r'\bnote\s*[-_]?\s*\d+(?:-\d+)?\b', ' ', text)
+    
+    text = re.sub(r'\s+', ' ', text)  
+    text = re.sub(r'[^a-zA-Z\s\.\,\-\;]', '', text)  
+    return text.strip()
+
+df['cleaned_note'] = df['note'].apply(extract_and_clean_blue_tag)
+df = df[df['cleaned_note'] != ""].reset_index(drop=True)
+
+print("\n--- Step 3: Executing Aggressive Deduplication ---")
+dedup_df = df.drop_duplicates(subset=['Rule_ID', 'cleaned_note']).reset_index(drop=True)
+print(f"Rows after deduplication: {len(dedup_df):,}")
+
+
+# ==========================================
+# STAGE 4: CONFIGURING BERTopic SUB-MODELS
+# ==========================================
+print("\n--- Step 4: Initializing Modular BERTopic Components ---")
+
+# 1. Domain Stop Words (Keep negations for compliance logic)
+from sklearn.feature_extraction import text
+standard_stop_words = list(text.ENGLISH_STOP_WORDS)
+negations = {'no', 'not', 'nor', 'neither', 'none', 'nothing', 'never', 'without'}
+custom_stops = [w for w in standard_stop_words if w not in negations] + ['alert', 'transaction', 'customer', 'account', 'party', 'reviewed', 'investigation', 'closed']
+
+# BERTopic uses CountVectorizer natively for its c-TF-IDF calculation
+vectorizer_model = CountVectorizer(stop_words=custom_stops, min_df=5, ngram_range=(1, 2))
+
+# 2. Embedding Engine (Local BGE-M3 for financial context)
+embedding_model = SentenceTransformer("BAAI/bge-m3", device="cuda") # Or 'cpu'
+
+# 3. UMAP (Maps Cosine semantic distances into a spatial dimension)
+umap_model = UMAP(n_neighbors=15, n_components=15, metric='cosine', random_state=42)
+
+# 4. HDBSCAN (Uses Euclidean on the UMAP output for fast, accurate clustering)
+hdbscan_model = HDBSCAN(min_cluster_size=10, metric='euclidean', cluster_selection_method='eom', prediction_data=True)
+
+
+# ==========================================
+# STAGE 5: FITTING THE BERTopic ORCHESTRATOR
+# ==========================================
+print("\n--- Step 5: Executing BERTopic Pipeline ---")
+
+topic_model = BERTopic(
+    embedding_model=embedding_model,
+    umap_model=umap_model,
+    hdbscan_model=hdbscan_model,
+    vectorizer_model=vectorizer_model,
+    min_topic_size=10,
+    calculate_probabilities=False # Set to True only if you need soft-clustering
+)
+
+# This single line runs Embeddings -> UMAP -> HDBSCAN -> c-TF-IDF -> Triangulation
+topics, probs = topic_model.fit_transform(dedup_df['cleaned_note'].tolist())
+
+# Map the cluster IDs back to your dataframe
+dedup_df['Topic_Cluster'] = topics
+print(f"Discovered {len(set(topics)) - 1} distinct behavioral clusters.")
+
+
+# ==========================================
+# STAGE 6: EXTRACTING THE LLM PAYLOAD (THE BERTopic MAGIC)
+# ==========================================
+print("\n--- Step 6: Constructing Triangulated LLM Payload ---")
+
+# BERTopic automatically stores the exact data we need for the LLM
+topic_info_df = topic_model.get_topic_info()
 
 llm_payload_records = []
-unique_clusters = [c for c in dedup_df['Topic_Cluster'].unique() if c != -1]
 
-for cluster_id in unique_clusters:
-    # 1. Isolate the row indices for this cluster
-    cluster_indices = dedup_df[dedup_df['Topic_Cluster'] == cluster_id].index.tolist()
+# Iterate through every valid cluster (ignoring -1 which is unclassified noise)
+for _, row in topic_info_df[topic_info_df['Topic'] != -1].iterrows():
+    cluster_id = row['Topic']
     
-    # 2. Extract the TF-IDF Signature (Top 7 Keywords)
-    # Average the TF-IDF scores across all notes in this specific cluster
-    cluster_tfidf_mean = np.asarray(tfidf_matrix[cluster_indices].mean(axis=0)).flatten()
-    top_keyword_indices = cluster_tfidf_mean.argsort()[::-1][:7] # Get top 7 words
-    cluster_keywords = [feature_names[idx] for idx in top_keyword_indices]
+    # 1. Get top 7 mathematical keywords for this bucket
+    cluster_keywords = ", ".join(row['Representation'][:7])
     
-    # 3. Find the Medoid (The Single Closest Note)
-    cluster_vectors = lsa_matrix[cluster_indices]
-    cluster_centroid = cluster_vectors.mean(axis=0).reshape(1, -1)
-    similarities = cosine_similarity(cluster_vectors, cluster_centroid).flatten()
-    
-    # THE FIX: Extract the indices of the top 3 highest scoring notes instead of just 1
-    NUM_NOTES_TO_SAMPLE = 3
-    
-    # Ensure we don't try to pull 3 notes if a tiny bucket only has 2
-    actual_samples = min(NUM_NOTES_TO_SAMPLE, len(cluster_indices)) 
-    top_local_indices = similarities.argsort()[::-1][:actual_samples]
-    
-    # Map back to global dataframe indices to get the actual text
-    top_global_indices = [cluster_indices[idx] for idx in top_local_indices]
-    sample_notes = dedup_df.loc[top_global_indices, 'cleaned_note'].tolist()
-    
-    # Format the notes cleanly for the LLM
+    # 2. Extract the Top 3 Representative Docs (BERTopic found the medoids for us!)
+    sample_notes = row['Representative_Docs']
     formatted_notes = " | ".join([f"Note {i+1}: {note}" for i, note in enumerate(sample_notes)])
     
-    # 4. Construct the Triangulated LLM Payload
+    # 3. Construct the Triangulated LLM Payload
     combined_payload = (
-        f"Key Cluster Vocabulary: {', '.join(cluster_keywords)}\n"
+        f"Key Cluster Vocabulary: {cluster_keywords}\n"
         f"Representative Context: {formatted_notes}"
     )
     
     llm_payload_records.append({
         "Bucket_ID": cluster_id,
+        "Cluster_Size": row['Count'],
         "Payload_For_LLM": combined_payload
     })
+    
+llm_input_df = pd.DataFrame(llm_payload_records)
+
+print("\n=== TOPIC ENGINEERING CONVERSION COMPLETE ===")
+print(f"Total LLM Inference Calls Required: {len(llm_input_df)}")
+print(llm_input_df[['Bucket_ID', 'Payload_For_LLM']].head(3))
+
+llm_input_df.to_parquet("bertopic_optimized_llm_payload.parquet")
