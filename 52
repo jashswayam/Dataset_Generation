@@ -19,15 +19,24 @@ for cluster_id in unique_clusters:
     cluster_centroid = cluster_vectors.mean(axis=0).reshape(1, -1)
     similarities = cosine_similarity(cluster_vectors, cluster_centroid).flatten()
     
-    # Extract ONLY the absolute #1 highest scoring note
-    best_local_index = similarities.argmax()
-    best_global_index = cluster_indices[best_local_index]
-    medoid_note = dedup_df.loc[best_global_index, 'cleaned_note']
+    # THE FIX: Extract the indices of the top 3 highest scoring notes instead of just 1
+    NUM_NOTES_TO_SAMPLE = 3
     
-    # 4. Construct the Hyper-Dense LLM Payload
+    # Ensure we don't try to pull 3 notes if a tiny bucket only has 2
+    actual_samples = min(NUM_NOTES_TO_SAMPLE, len(cluster_indices)) 
+    top_local_indices = similarities.argsort()[::-1][:actual_samples]
+    
+    # Map back to global dataframe indices to get the actual text
+    top_global_indices = [cluster_indices[idx] for idx in top_local_indices]
+    sample_notes = dedup_df.loc[top_global_indices, 'cleaned_note'].tolist()
+    
+    # Format the notes cleanly for the LLM
+    formatted_notes = " | ".join([f"Note {i+1}: {note}" for i, note in enumerate(sample_notes)])
+    
+    # 4. Construct the Triangulated LLM Payload
     combined_payload = (
-        f"Key Cluster Vocabulary: {', '.join(cluster_keywords)} | "
-        f"Primary Context Note: {medoid_note}"
+        f"Key Cluster Vocabulary: {', '.join(cluster_keywords)}\n"
+        f"Representative Context: {formatted_notes}"
     )
     
     llm_payload_records.append({
