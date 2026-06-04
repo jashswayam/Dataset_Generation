@@ -1,152 +1,134 @@
-# ==========================================
-# STAGE 1: DEPENDENCY INITIALIZATION
-# ==========================================
-import os
-import re
 import pandas as pd
-from bs4 import BeautifulSoup
-
-# The BERTopic Ecosystem
-from bertopic import BERTopic
-from umap import UMAP
-from hdbscan import HDBSCAN
-from sklearn.feature_extraction.text import CountVectorizer
-from sentence_transformers import SentenceTransformer
-
-import warnings
-warnings.filterwarnings('ignore')
+import json
+import os
+import requests  # Assuming your company host provides a standard REST API
 
 # ==========================================
-# STAGE 2: DATA INGESTION
+# STAGE 1: INGESTION & QUANTITATIVE MATH
 # ==========================================
-PARQUET_PATH = "your_300k_alerts.parquet"
+OPTIMIZED_PARQUET_PATH = "bertopic_optimized_llm_payload.parquet"
+MARKDOWN_OUTPUT_PATH = "AML_Topic_Analysis_Report.md"
 
-print("--- Step 1: Ingesting Parquet Data ---")
-df = pd.read_parquet(PARQUET_PATH, engine='pyarrow')
-print(f"Initial row count: {len(df):,}")
+# Load the optimized table
+df_payload = pd.read_parquet(OPTIMIZED_PARQUET_PATH)
+
+# Calculate global quantitative volume
+TOTAL_ALERTS_PROCESSED = df_payload['Cluster_Size'].sum()
+df_payload['Volume_Percentage'] = (df_payload['Cluster_Size'] / TOTAL_ALERTS_PROCESSED) * 100
+
+print(f"Total Base Alerts Aggregated: {TOTAL_ALERTS_PROCESSED:,}")
+print(f"Total Unique Automated Clusters to Process: {len(df_payload)}")
 
 # ==========================================
-# STAGE 3: DATA SANITIZATION & DEDUPLICATION
+# STAGE 2: INITIALIZE MARKDOWN REPORT FILE
 # ==========================================
-print("\n--- Step 2: Executing Surgical HTML Cleaning ---")
+# Create or overwrite the file with an executive header
+with open(MARKDOWN_OUTPUT_PATH, "w", encoding="utf-8") as f:
+    f.write("# Executive AML False-Positive Topic Analysis Report\n")
+    f.write(f"**Total Historical Alerts Analyzed:** {TOTAL_ALERTS_PROCESSED:,}\n")
+    f.write(f"**Total Distinct Behavioral Vectors Found:** {len(df_payload)}\n")
+    f.write("---\n\n")
+    f.write("## Discovered Compliance Topics & Quantitative Breakdown\n\n")
+    # Write the table headers
+    f.write("| Bucket ID | Core Topic Name | Alert Volume | Volume % | Analytical Description |\n")
+    f.write("|---|---|---|---|---|\n")
 
-def extract_and_clean_blue_tag(html_content):
-    if pd.isna(html_content) or not isinstance(html_content, str): return ""
+# ==========================================
+# STAGE 3: CHUNKING & LLM ORCHESTRATION
+# ==========================================
+def call_company_llm(system_prompt, user_prompt):
+    """
+    Wrapper function for your company's hosted gpt-oss-120b instance.
+    Modify headers and payload parameters to match your company's internal API gateway.
+    """
+    API_URL = "http://your-internal-llm-gateway/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {os.getenv('INTERNAL_LLM_KEY', 'mock-key')}",
+        "Content-Type": "application/json"
+    }
     
-    soup = BeautifulSoup(html_content, 'html.parser')
-    blue_elements = soup.find_all(lambda tag: tag.name in ['div', 'span', 'td', 'th', 'p'] and 
-                                 ('background-color: blue' in str(tag.get('style')) or 'blue' in str(tag.get('class'))))
+    payload = {
+        "model": "gpt-oss-120b",
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0.1,  # Set very low for deterministic, strict JSON output
+        "response_format": {"type": "json_object"}  # Enforce JSON if your gateway supports it
+    }
     
-    if blue_elements:
-        text = " ".join([elem.get_text(separator=" ", strip=True) for elem in blue_elements])
-    else:
-        text = ""
-        for header in soup.find_all(['b', 'strong', 'td']):
-            if "analysis" in header.text.lower() or "conclusion" in header.text.lower():
-                next_node = header.next_sibling
-                if next_node: text = next_node.get_text(strip=True); break
-        if not text: text = soup.get_text(separator=" ", strip=True)
+    try:
+        response = requests.post(API_URL, json=payload, headers=headers, timeout=60)
+        response.raise_for_status()
+        return response.json()['choices'][0]['message']['content']
+    except Exception as e:
+        print(f"API Error encountered: {e}")
+        return None
+
+# Definitive Corporate Persona & Instructions
+SYSTEM_PROMPT = """You are an expert system serving as a Senior AML Compliance Director.
+Your task is to analyze the provided batches of clustered transaction alert notes and assign precise, industry-standard corporate topics and descriptions.
+
+For each bucket provided in the prompt, you must extract:
+1. Topic_Name: A 3-to-5 word professional compliance label (e.g., "Legitimate Corporate Payroll", "Inter-Account Self-Transfers").
+2. Description: A concise 1-to-2 sentence functional summary explaining why these alerts are false positives.
+
+CRITICAL CONSTRAINTS:
+- You must output your response STRICTLY as a valid JSON object containing an array named 'topics'.
+- Do not add text before or after the JSON block.
+
+Expected Output Schema:
+{
+  "topics": [
+    {
+      "Bucket_ID": 1,
+      "Topic_Name": "Example Topic Name",
+      "Description": "Detailed overview sentence."
+    }
+  ]
+}"""
+
+# Process in mini-batches of 10 clusters to maintain high focus inside the context window
+BATCH_SIZE = 10
+
+for i in range(0, len(df_payload), BATCH_SIZE):
+    batch_df = df_payload.iloc[i:i+BATCH_SIZE]
+    print(f"Processing Cluster Batch: {i} to {i+len(batch_df)}...")
+    
+    # Construct the User Query Context
+    user_prompt_builder = "Analyze the following cluster groups and generate names/descriptions based on their vocabulary and sample contexts:\n\n"
+    
+    for _, row in batch_df.iterrows():
+        user_prompt_builder += f"### Group ID: {row['Bucket_ID']}\n"
+        user_prompt_builder += f"{row['Payload_For_LLM']}\n\n"
+        
+    # Execute API Call to gpt-oss-120b
+    raw_llm_response = call_company_llm(SYSTEM_PROMPT, user_prompt_builder)
+    
+    if raw_llm_response:
+        try:
+            # Parse the structured response
+            parsed_json = json.loads(raw_llm_response)
             
-    text = text.lower()
-    
-    # THE FIX: Annihilate the 'note[number]' pattern leaking into your buckets
-    text = re.sub(r'\bnote\s*[-_]?\s*\d+(?:-\d+)?\b', ' ', text)
-    
-    text = re.sub(r'\s+', ' ', text)  
-    text = re.sub(r'[^a-zA-Z\s\.\,\-\;]', '', text)  
-    return text.strip()
+            # Open the live markdown ledger and stream the results instantly
+            with open(MARKDOWN_OUTPUT_PATH, "a", encoding="utf-8") as f:
+                for topic_data in parsed_json.get('topics', []):
+                    b_id = topic_data['Bucket_ID']
+                    
+                    # Match back to our dataframe to extract our exact pre-calculated math
+                    meta_row = df_payload[df_payload['Bucket_ID'] == b_id].iloc[0]
+                    vol = meta_row['Cluster_Size']
+                    pct = meta_row['Volume_Percentage']
+                    
+                    # Escape vertical bars to prevent breaking markdown tables
+                    clean_desc = topic_data['Description'].replace("|", "-")
+                    
+                    # Append row directly to file
+                    f.write(f"| {b_id} | **{topic_data['Topic_Name']}** | {vol:,} | {pct:.2f}% | {clean_desc} |\n")
+                    
+        except json.JSONDecodeError:
+            print(f"CRITICAL: Failed to parse JSON for batch index {i}. Logging raw output for manual review.")
+            with open("failed_raw_batches.txt", "a") as err_log:
+                err_log.write(f"--- Batch {i} Fail ---\n{raw_llm_response}\n\n")
 
-df['cleaned_note'] = df['note'].apply(extract_and_clean_blue_tag)
-df = df[df['cleaned_note'] != ""].reset_index(drop=True)
-
-print("\n--- Step 3: Executing Aggressive Deduplication ---")
-dedup_df = df.drop_duplicates(subset=['Rule_ID', 'cleaned_note']).reset_index(drop=True)
-print(f"Rows after deduplication: {len(dedup_df):,}")
-
-
-# ==========================================
-# STAGE 4: CONFIGURING BERTopic SUB-MODELS
-# ==========================================
-print("\n--- Step 4: Initializing Modular BERTopic Components ---")
-
-# 1. Domain Stop Words (Keep negations for compliance logic)
-from sklearn.feature_extraction import text
-standard_stop_words = list(text.ENGLISH_STOP_WORDS)
-negations = {'no', 'not', 'nor', 'neither', 'none', 'nothing', 'never', 'without'}
-custom_stops = [w for w in standard_stop_words if w not in negations] + ['alert', 'transaction', 'customer', 'account', 'party', 'reviewed', 'investigation', 'closed']
-
-# BERTopic uses CountVectorizer natively for its c-TF-IDF calculation
-vectorizer_model = CountVectorizer(stop_words=custom_stops, min_df=5, ngram_range=(1, 2))
-
-# 2. Embedding Engine (Local BGE-M3 for financial context)
-embedding_model = SentenceTransformer("BAAI/bge-m3", device="cuda") # Or 'cpu'
-
-# 3. UMAP (Maps Cosine semantic distances into a spatial dimension)
-umap_model = UMAP(n_neighbors=15, n_components=15, metric='cosine', random_state=42)
-
-# 4. HDBSCAN (Uses Euclidean on the UMAP output for fast, accurate clustering)
-hdbscan_model = HDBSCAN(min_cluster_size=10, metric='euclidean', cluster_selection_method='eom', prediction_data=True)
-
-
-# ==========================================
-# STAGE 5: FITTING THE BERTopic ORCHESTRATOR
-# ==========================================
-print("\n--- Step 5: Executing BERTopic Pipeline ---")
-
-topic_model = BERTopic(
-    embedding_model=embedding_model,
-    umap_model=umap_model,
-    hdbscan_model=hdbscan_model,
-    vectorizer_model=vectorizer_model,
-    min_topic_size=10,
-    calculate_probabilities=False # Set to True only if you need soft-clustering
-)
-
-# This single line runs Embeddings -> UMAP -> HDBSCAN -> c-TF-IDF -> Triangulation
-topics, probs = topic_model.fit_transform(dedup_df['cleaned_note'].tolist())
-
-# Map the cluster IDs back to your dataframe
-dedup_df['Topic_Cluster'] = topics
-print(f"Discovered {len(set(topics)) - 1} distinct behavioral clusters.")
-
-
-# ==========================================
-# STAGE 6: EXTRACTING THE LLM PAYLOAD (THE BERTopic MAGIC)
-# ==========================================
-print("\n--- Step 6: Constructing Triangulated LLM Payload ---")
-
-# BERTopic automatically stores the exact data we need for the LLM
-topic_info_df = topic_model.get_topic_info()
-
-llm_payload_records = []
-
-# Iterate through every valid cluster (ignoring -1 which is unclassified noise)
-for _, row in topic_info_df[topic_info_df['Topic'] != -1].iterrows():
-    cluster_id = row['Topic']
-    
-    # 1. Get top 7 mathematical keywords for this bucket
-    cluster_keywords = ", ".join(row['Representation'][:7])
-    
-    # 2. Extract the Top 3 Representative Docs (BERTopic found the medoids for us!)
-    sample_notes = row['Representative_Docs']
-    formatted_notes = " | ".join([f"Note {i+1}: {note}" for i, note in enumerate(sample_notes)])
-    
-    # 3. Construct the Triangulated LLM Payload
-    combined_payload = (
-        f"Key Cluster Vocabulary: {cluster_keywords}\n"
-        f"Representative Context: {formatted_notes}"
-    )
-    
-    llm_payload_records.append({
-        "Bucket_ID": cluster_id,
-        "Cluster_Size": row['Count'],
-        "Payload_For_LLM": combined_payload
-    })
-    
-llm_input_df = pd.DataFrame(llm_payload_records)
-
-print("\n=== TOPIC ENGINEERING CONVERSION COMPLETE ===")
-print(f"Total LLM Inference Calls Required: {len(llm_input_df)}")
-print(llm_input_df[['Bucket_ID', 'Payload_For_LLM']].head(3))
-
-llm_input_df.to_parquet("bertopic_optimized_llm_payload.parquet")
+print(f"\nPipeline Execution Complete! Your production report is live at: '{MARKDOWN_OUTPUT_PATH}'")
