@@ -1,16 +1,7 @@
 #!/usr/bin/env python3
 import sys
+import json
 import re
-import traceback
-
-LOG_FILE = r"C:\Users\h59257\.claude\hooks\codec_debug.log"
-
-def log_debug(msg):
-    try:
-        with open(LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(msg + "\n")
-    except:
-            pass
 
 RAW_TERMS = [
     ['s', 'e', 'c', 'r', 'e', 't'],
@@ -25,49 +16,48 @@ RAW_TERMS = [
 
 SENSITIVE_TERMS = ["".join(chars) for chars in RAW_TERMS]
 
-def encode_match(match):
-    return "__x__".join(list(match.group(0)))
-
-def encode_payload(text: str) -> str:
-    if not SENSITIVE_TERMS:
-        return text
+def encode_text(text: str) -> str:
     pattern = re.compile(r'\b(' + '|'.join(map(re.escape, SENSITIVE_TERMS)) + r')\b', re.IGNORECASE)
-    return pattern.sub(encode_match, text)
+    return pattern.sub(lambda m: "__x__".join(list(m.group(0))), text)
 
-def decode_payload(text: str) -> str:
+def decode_text(text: str) -> str:
     for term in SENSITIVE_TERMS:
         pattern_str = r"__x__".join(map(re.escape, list(term)))
         pattern = re.compile(pattern_str, re.IGNORECASE)
         text = pattern.sub(lambda m: m.group(0).replace("__x__", "").replace("__X__", ""), text)
     return text
 
+def process_json_data(data, mode):
+    """Recursively walk through the JSON payload and sanitize string values."""
+    if isinstance(data, dict):
+        return {k: process_json_data(v, mode) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [process_json_data(item, mode) for item in data]
+    elif isinstance(data, str):
+        return decode_text(data) if mode == "pre" else encode_text(data)
+    return data
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "pre"
-    log_debug(f"--- Hook started: mode={mode} ---")
-    
     try:
-        # Force strict UTF-8 decoding to prevent Windows codepage crashes
-        raw_input = sys.stdin.buffer.read().decode('utf-8', errors='replace')
-        if not raw_input:
-            log_debug("Input was empty.")
+        raw_input = sys.stdin.read()
+        if not raw_input.strip():
             return
 
-        if mode == "pre":
-            output = decode_payload(raw_input)
-        elif mode == "post":
-            output = encode_payload(raw_input)
-        else:
-            output = raw_input
+        # Claude Code passes tool hooks as a JSON payload
+        try:
+            data = json.loads(raw_input)
+            processed_data = process_json_data(data, mode)
+            output = json.dumps(processed_data)
+        except json.JSONDecodeError:
+            # Fallback if raw text is received
+            output = decode_text(raw_input) if mode == "pre" else encode_text(raw_input)
 
-        # Force unbuffered UTF-8 write to stdout
-        sys.stdout.buffer.write(output.encode('utf-8', errors='replace'))
+        sys.stdout.write(output)
         sys.stdout.flush()
-        log_debug("Successfully processed and flushed.")
         sys.exit(0)
         
     except Exception as e:
-        err_msg = traceback.format_exc()
-        log_debug(f"CRITICAL ERROR:\n{err_msg}")
         sys.stderr.write(f"Hook Error: {str(e)}\n")
         sys.exit(1)
 
